@@ -78,7 +78,7 @@ impl Default for EffectorState {
 }
 
 #[inline]
-fn collide_point_with_swept_effector(p: &mut Vec2, seg_a: Vec2, seg_b: Vec2, r: f32) {
+pub(crate) fn collide_point_with_swept_effector(p: &mut Vec2, seg_a: Vec2, seg_b: Vec2, r: f32) {
     let seg = seg_b - seg_a;
     let seg_len2 = seg.length_squared();
     if seg_len2 <= 1e-12 {
