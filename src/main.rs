@@ -7,13 +7,24 @@ use physics::PhysicsPlugin;
 use bevy_polyline::prelude::PolylinePlugin;
 
 fn main() {
-    App::new()
-        // Solid black background
-        .insert_resource(ClearColor(Color::BLACK))
-        // Configure the fixed timestep clock (used by systems in FixedUpdate)
-        .insert_resource(Time::<Fixed>::from_hz(PHYSICS_HZ))
-        // Default plugins with window overrides for the web canvas
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+    let mut app = App::new();
+    // Solid black background
+    app.insert_resource(ClearColor(Color::BLACK));
+    // Configure the fixed timestep clock (used by systems in FixedUpdate)
+    app.insert_resource(Time::<Fixed>::from_hz(PHYSICS_HZ));
+
+    // Firefox focus/refocus workaround: keep continuous updates (wasm only)
+    #[cfg(target_arch = "wasm32")]
+    {
+        use bevy::winit::{UpdateMode, WinitSettings};
+        app.insert_resource(WinitSettings {
+            focused_mode: UpdateMode::Continuous,
+            unfocused_mode: UpdateMode::Continuous,
+        });
+    }
+
+    // Default plugins with window overrides for the web canvas
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 // Mount into an existing <canvas id="bevy-canvas"> (web only)
                 #[cfg(target_arch = "wasm32")]
@@ -30,8 +41,9 @@ fn main() {
             }),
             ..default()
         }))
-    .add_plugins(PolylinePlugin)
+        .add_plugins(PolylinePlugin)
         // Your custom physics + point systems
-        .add_plugins(PhysicsPlugin)
-        .run();
+        .add_plugins(PhysicsPlugin);
+
+    app.run();
 }

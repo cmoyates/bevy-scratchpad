@@ -24,3 +24,7 @@ pub const GRAVITY: Vec2 = Vec2::new(0.0, -980.0);
 pub const INITIAL_VEL: Vec2 = Vec2::new(100.0, 0.0);
 
 pub const MOUSE_RADIUS: f32 = 30.0;
+
+/// Cap the number of FixedUpdate physics passes worth of heavy work per render frame
+/// to avoid long catch-up spikes when the app stalls.
+pub const MAX_SUBSTEPS_PER_FRAME: u32 = 3;

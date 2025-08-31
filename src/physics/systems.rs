@@ -11,6 +11,19 @@ use bevy::window::PrimaryWindow;
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct CursorWorld(pub Vec2);
 
+/// Dirty flag for outline updates: set by physics (FixedUpdate), consumed by Update.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct OutlineDirty(pub bool);
+
+/// Counts how many physics substeps have occurred in the current render frame.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct SubstepCounter(pub u32);
+
+/// Reset substep counter each render frame (Update schedule runs once per frame).
+pub fn reset_substep_counter(mut counter: ResMut<SubstepCounter>) {
+    counter.0 = 0;
+}
+
 /// Native-only quit: press Esc or Q to exit the app.
 /// (No-op on wasm32.)
 pub fn exit_on_esc_or_q_if_native(keys: Res<ButtonInput<KeyCode>>, mut exit: EventWriter<AppExit>) {
@@ -130,7 +143,13 @@ pub fn update_blob_outline(
     q_points: Query<&Point>,
     mut lines: ResMut<Assets<PolylineAsset>>,
     q_outline: Query<&PolylineHandle, With<BlobOutline>>,
+    mut dirty: ResMut<OutlineDirty>,
 ) {
+    if !dirty.0 {
+        return;
+    }
+    // Reset dirty so we only update once per render frame
+    dirty.0 = false;
     let Some(soft) = q_soft.iter().next() else {
         // No softbody yet
         // info!("update_blob_outline: no SoftBody found");

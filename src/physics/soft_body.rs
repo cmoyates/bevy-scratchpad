@@ -4,6 +4,7 @@ use bevy::window::PrimaryWindow;
 use super::point::Point;
 use crate::config::*;
 use crate::physics::systems::EffectorState;
+use crate::physics::systems::SubstepCounter;
 use crate::physics::systems::collide_point_with_swept_effector;
 
 /// How many Gauss–Seidel iterations to run per fixed tick (from config).
@@ -156,6 +157,13 @@ pub fn softbody_step(
     mut q_soft: Query<&mut SoftBody>,
     buttons: Res<ButtonInput<MouseButton>>, // for left-press state
     eff: Res<EffectorState>,                // current effector state
+    // Scratch buffers to avoid per-frame allocations in tight loops
+    mut disp_accum_buf: Local<Vec<Vec2>>,
+    mut disp_weight_buf: Local<Vec<u32>>,
+    mut poly_buf: Local<Vec<Vec2>>,
+    mut corrections_buf: Local<Vec<Vec2>>,
+    mut outline_dirty: ResMut<crate::physics::systems::OutlineDirty>,
+    mut substeps: ResMut<SubstepCounter>,
 ) {
     let dt = time.delta_secs();
     let dt2 = dt * dt;
@@ -215,10 +223,18 @@ pub fn softbody_step(
 
         // --- 2) Constraint solve (Gauss–Seidel): distance + area (dilation)
         // Based on Position-Based Dynamics (Jakobsen / Müller et al.). :contentReference[oaicite:3]{index=3}
+        // Cap total heavy iterations done per render frame across fixed steps
+        if substeps.0 >= MAX_SUBSTEPS_PER_FRAME {
+            break;
+        }
+        substeps.0 += 1;
+
         for _ in 0..CONSTRAINT_ITERATIONS {
             // 2a) Distance constraints between ring neighbors: accumulate symmetric corrections
-            let mut disp_accum: Vec<Vec2> = vec![Vec2::ZERO; soft.num_points];
-            let mut disp_weight: Vec<u32> = vec![0; soft.num_points];
+            disp_accum_buf.clear();
+            disp_accum_buf.resize(soft.num_points, Vec2::ZERO);
+            disp_weight_buf.clear();
+            disp_weight_buf.resize(soft.num_points, 0);
 
             for i in 0..soft.num_points {
                 let i_next = (i + 1) % soft.num_points;
@@ -243,28 +259,34 @@ pub fn softbody_step(
                 if len > 0.0 && len > soft.chord_length {
                     let error = (len - soft.chord_length) * 0.5;
                     let offset = diff / len * error;
-                    disp_accum[i] += offset;
-                    disp_accum[i_next] += -offset;
-                    disp_weight[i] += 1;
-                    disp_weight[i_next] += 1;
+                    disp_accum_buf[i] += offset;
+                    disp_accum_buf[i_next] += -offset;
+                    disp_weight_buf[i] += 1;
+                    disp_weight_buf[i_next] += 1;
                 }
             }
 
             // 2b) Area (dilation) constraint to keep blob “puffy”
-            let corrections = dilation_corrections(&soft, &q_points);
-            for (i, c) in corrections.into_iter().enumerate() {
-                disp_accum[i] += c;
-                disp_weight[i] += 1;
+            corrections_buf.clear();
+            corrections_buf.resize(soft.num_points, Vec2::ZERO);
+            dilation_corrections_into(&soft, &q_points, &mut poly_buf, &mut corrections_buf);
+            for (i, c) in corrections_buf.iter().copied().enumerate() {
+                disp_accum_buf[i] += c;
+                disp_weight_buf[i] += 1;
             }
 
             // 2c) Apply average displacement per point
+            let mut any_moved = false;
             for i in 0..soft.num_points {
-                if disp_weight[i] == 0 {
+                if disp_weight_buf[i] == 0 {
                     continue;
                 }
-                let avg = disp_accum[i] / (disp_weight[i] as f32);
+                let avg = disp_accum_buf[i] / (disp_weight_buf[i] as f32);
                 if let Ok(mut p) = q_points.get_mut(soft.points[i]) {
-                    p.position += avg;
+                    if avg.x != 0.0 || avg.y != 0.0 {
+                        p.position += avg;
+                        any_moved = true;
+                    }
                 }
             }
 
@@ -277,9 +299,17 @@ pub fn softbody_step(
                     if let Ok(mut p) = q_points.get_mut(soft.points[i]) {
                         let mut pos = p.position;
                         collide_point_with_swept_effector(&mut pos, ra, rb, r);
-                        p.position = pos;
+                        if pos != p.position {
+                            p.position = pos;
+                            any_moved = true;
+                        }
                     }
                 }
+            }
+
+            // Mark dirty if any point moved in this iteration
+            if any_moved {
+                outline_dirty.0 = true;
             }
         }
 
@@ -295,19 +325,25 @@ pub fn softbody_step(
 
 /// Compute per-vertex normal offsets to correct polygon area towards `desired_area`.
 /// Mirrors the Python approach: use a secant across neighbors and its outward normal.
-fn dilation_corrections(soft: &SoftBody, q_points: &Query<&mut Point>) -> Vec<Vec2> {
+fn dilation_corrections_into(
+    soft: &SoftBody,
+    q_points: &Query<&mut Point>,
+    poly_buf: &mut Vec<Vec2>,
+    out_buf: &mut Vec<Vec2>,
+) {
     let n = soft.num_points;
-    let mut poly: Vec<Vec2> = Vec::with_capacity(n);
+    poly_buf.clear();
+    poly_buf.reserve_exact(n);
     for &e in &soft.points {
         let pos = q_points
             .get(e)
             .ok()
             .map(|p| p.position)
             .unwrap_or(Vec2::ZERO);
-        poly.push(pos);
+        poly_buf.push(pos);
     }
 
-    let area = polygon_area_signed(&poly);
+    let area = polygon_area_signed(poly_buf);
     let error = soft.desired_area - area;
     let offset = if soft.circumference != 0.0 {
         error / soft.circumference
@@ -315,10 +351,11 @@ fn dilation_corrections(soft: &SoftBody, q_points: &Query<&mut Point>) -> Vec<Ve
         0.0
     };
 
-    let mut out = vec![Vec2::ZERO; n];
+    out_buf.clear();
+    out_buf.resize(n, Vec2::ZERO);
     for i in 0..n {
-        let prev = poly[(i + n - 1) % n];
-        let next = poly[(i + 1) % n];
+        let prev = poly_buf[(i + n - 1) % n];
+        let next = poly_buf[(i + 1) % n];
         let secant = next - prev;
         // outward normal like Python: (y, -x)
         let normal = if secant.length_squared() == 0.0 {
@@ -326,9 +363,8 @@ fn dilation_corrections(soft: &SoftBody, q_points: &Query<&mut Point>) -> Vec<Ve
         } else {
             Vec2::new(secant.y, -secant.x).normalize() * offset
         };
-        out[i] = normal;
+        out_buf[i] = normal;
     }
-    out
 }
 
 /// Signed polygon area via the shoelace-like form used in your Python code.
