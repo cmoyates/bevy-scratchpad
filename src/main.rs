@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{gizmos::GizmoPlugin, prelude::*};
 mod config;
 mod physics;
 

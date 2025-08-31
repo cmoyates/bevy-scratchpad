@@ -25,3 +25,5 @@ pub const INITIAL_VEL: Vec2 = Vec2::new(100.0, 0.0);
 
 /// Blob is centered at the world origin
 pub const CENTER: Vec2 = Vec2::ZERO;
+
+pub const MOUSE_RADIUS: f32 = 40.0;
