@@ -8,9 +8,14 @@ edition = "2024"
 # Add or remove feature lines below based on what you actually use:
 # - bevy_sprite: 2D sprites; drop if you're purely drawing via meshes/shaders
 # - bevy_asset + png: only if you load textures/assets; drop both if not needed
-bevy = { version = "0.16.1", features = [
-
-  "webgpu"           # keep for WebGPU backend
+bevy = { version = "0.16.1", default-features = false, features = [
+  "bevy_winit",
+  "bevy_window",
+  "bevy_render",
+  "bevy_core_pipeline",
+  "bevy_sprite",     # ✨ needed for ColorMaterial / 2D materials
+  "webgpu",           # keep for WebGPU backend
+  "bevy_gizmos"          # <-- add this line to enable built-in gizmos
 ]}
 bevy_polyline = "0.12.0"
 

@@ -8,8 +8,8 @@ pub mod systems;
 use soft_body::{softbody_step, spawn_demo_like_python, update_world_bounds};
 
 use crate::physics::systems::{
-    CursorWorld, EffectorState, OutlineDirty, SubstepCounter, reset_substep_counter,
-    effector_swept_collision_system, update_blob_outline,
+    CursorWorld, EffectorState, OutlineDirty, SubstepCounter, effector_swept_collision_system,
+    reset_substep_counter, update_blob_outline,
 };
 
 pub mod debug; // <-- add
@@ -43,7 +43,7 @@ impl Plugin for PhysicsPlugin {
                     systems::update_cursor_world, // your cursor tracker
                     debug::draw_effector_gizmo,   // effector gizmo
                     systems::exit_on_esc_or_q_if_native,
-                    reset_substep_counter,        // reset substep count each render frame
+                    reset_substep_counter, // reset substep count each render frame
                 ),
             )
             // Verlet + constraint solve at a fixed timestep (set rate in main via Time::<Fixed>)
