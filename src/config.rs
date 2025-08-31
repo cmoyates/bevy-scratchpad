@@ -23,7 +23,4 @@ pub const GRAVITY: Vec2 = Vec2::new(0.0, -980.0);
 /// The initial velocity applied to all points
 pub const INITIAL_VEL: Vec2 = Vec2::new(100.0, 0.0);
 
-/// Blob is centered at the world origin
-pub const CENTER: Vec2 = Vec2::ZERO;
-
-pub const MOUSE_RADIUS: f32 = 40.0;
+pub const MOUSE_RADIUS: f32 = 30.0;

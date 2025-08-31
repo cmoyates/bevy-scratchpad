@@ -52,7 +52,7 @@ pub fn update_world_bounds(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut bounds: ResMut<WorldBounds>,
 ) {
-    if let Ok(w) = windows.get_single() {
+    if let Ok(w) = windows.single() {
         bounds.half = 0.5 * w.size();
     }
 }
@@ -97,6 +97,7 @@ pub fn spawn_soft_body(
                 Mesh2d(mesh.clone()),
                 MeshMaterial2d(mat.clone()),
                 Transform::from_xyz(curr.x, curr.y, 0.0),
+                Visibility::Hidden, // hide individual point sprites
                 // physics
                 point,
             ))
@@ -119,7 +120,7 @@ pub fn spawn_demo_like_python(
     // camera (if you already spawn one elsewhere, remove this)
     commands.spawn(Camera2d);
 
-    let Ok(win) = windows.get_single() else {
+    let Ok(win) = windows.single() else {
         return;
     };
     let half = 0.5 * win.size();
@@ -145,29 +146,6 @@ pub fn spawn_demo_like_python(
     );
 }
 
-/// Optional: one-time random “kick” akin to Python's `random_vector2(5)`.
-/// Requires `rand = { version = "0.8", features = ["small_rng"] }` in Cargo.toml.
-/// Remove this system if you don't want the randomness.
-pub fn apply_random_kick_once(mut ran: Local<bool>, mut q: Query<&mut Point>) {
-    if *ran {
-        return;
-    }
-    *ran = true;
-
-    #[cfg(feature = "random_kick")]
-    {
-        let mut rng = rand::rngs::SmallRng::from_entropy();
-        use rand::Rng;
-        let angle: f32 = rng.gen_range(0.0..std::f32::consts::TAU);
-        let mag: f32 = 5.0;
-        let force = Vec2::new(angle.cos(), angle.sin()) * mag;
-
-        for mut p in &mut q {
-            p.acceleration += force / p.mass;
-        }
-    }
-}
-
 /// Fixed-timestep integration: Verlet with per-second damping, then
 /// PBD-style constraints (distance + area), then write positions to `Transform`.
 pub fn softbody_step(
@@ -187,7 +165,7 @@ pub fn softbody_step(
     // We scale the Verlet velocity-like term (x_t - x_{t-1}) by this factor.
     let damping_per_tick = DAMPING_PER_SECOND.powf(dt);
 
-    for mut soft in &mut q_soft {
+    for soft in &mut q_soft {
         // --- 1) Verlet integrate all points; add gravity EACH tick; bounce on window AABB
         for &e in &soft.points {
             if let Ok(mut p) = q_points.get_mut(e) {

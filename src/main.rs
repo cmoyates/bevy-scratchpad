@@ -1,9 +1,10 @@
-use bevy::{gizmos::GizmoPlugin, prelude::*};
+use bevy::prelude::*;
 mod config;
 mod physics;
 
 use config::PHYSICS_HZ;
 use physics::PhysicsPlugin;
+use bevy_polyline::prelude::PolylinePlugin;
 
 fn main() {
     App::new()
@@ -29,6 +30,7 @@ fn main() {
             }),
             ..default()
         }))
+    .add_plugins(PolylinePlugin)
         // Your custom physics + point systems
         .add_plugins(PhysicsPlugin)
         .run();
