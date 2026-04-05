@@ -160,6 +160,12 @@ pub fn softbody_step(
     let dt = time.delta_secs();
     let damping_per_tick = physics.damping_per_second.powf(dt);
 
+    // Skip physics until window bounds are initialized — zero bounds
+    // would crush all points to origin via bounce_in_bounds.
+    if bounds.half == Vec2::ZERO {
+        return;
+    }
+
     let effector_input = EffectorInput {
         active: buttons.pressed(MouseButton::Left),
         prev: effector.prev,
