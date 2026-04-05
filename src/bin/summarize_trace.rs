@@ -11,6 +11,8 @@ struct TraceEvent {
     ts: f64,
     #[serde(default)]
     dur: f64,
+    #[serde(default)]
+    tid: i64,
 }
 
 struct SpanStats {
@@ -32,7 +34,7 @@ impl SpanStats {
 
     fn median(&self) -> f64 {
         let mut sorted = self.durations.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let mid = sorted.len() / 2;
         if sorted.len() % 2 == 0 {
             (sorted[mid - 1] + sorted[mid]) / 2.0
@@ -82,7 +84,7 @@ fn main() {
 
     // Match B/E pairs and X events into durations
     let mut spans: HashMap<String, SpanStats> = HashMap::new();
-    let mut open_spans: HashMap<(String, i64), f64> = HashMap::new(); // (name, tid) -> start_ts
+    let mut open_spans: HashMap<(String, i64), f64> = HashMap::new();
 
     for event in &events {
         match event.ph.as_str() {
@@ -96,11 +98,10 @@ fn main() {
                     .push(event.dur);
             }
             "B" => {
-                // Use tid=0 as default since we're single-threaded
-                open_spans.insert((event.name.clone(), 0), event.ts);
+                open_spans.insert((event.name.clone(), event.tid), event.ts);
             }
             "E" => {
-                if let Some(start) = open_spans.remove(&(event.name.clone(), 0)) {
+                if let Some(start) = open_spans.remove(&(event.name.clone(), event.tid)) {
                     let duration = event.ts - start;
                     if duration > 0.0 {
                         spans
@@ -118,7 +119,7 @@ fn main() {
     }
 
     let mut sorted: Vec<_> = spans.into_iter().collect();
-    sorted.sort_by(|a, b| b.1.total().partial_cmp(&a.1.total()).unwrap());
+    sorted.sort_by(|a, b| b.1.total().partial_cmp(&a.1.total()).unwrap_or(std::cmp::Ordering::Equal));
 
     println!("name,calls,total_us,mean_us,median_us,max_us,min_us");
     for (name, stats) in &sorted {
