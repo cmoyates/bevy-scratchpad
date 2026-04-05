@@ -1,5 +1,4 @@
 use bevy::math::Vec2;
-use tracing::info_span;
 
 use crate::physics::geometry::{collide_point_with_swept_effector, dilation_corrections};
 
@@ -30,7 +29,6 @@ pub fn solve_iteration(
     disp_weights: &mut Vec<u32>,
     corrections: &mut Vec<Vec2>,
 ) -> SolveResult {
-    let _span = info_span!("solve_iteration").entered();
     let n = positions.len();
 
     disp_accum.clear();
@@ -77,7 +75,12 @@ pub fn solve_iteration(
     if effector.active {
         for pos in positions.iter_mut() {
             let mut new_pos = *pos;
-            collide_point_with_swept_effector(&mut new_pos, effector.prev, effector.curr, effector.radius);
+            collide_point_with_swept_effector(
+                &mut new_pos,
+                effector.prev,
+                effector.curr,
+                effector.radius,
+            );
             if new_pos != *pos {
                 *pos = new_pos;
                 any_moved = true;
@@ -146,7 +149,10 @@ mod tests {
                 .zip(positions.iter())
                 .map(|(a, b)| (*a - *b).length())
                 .fold(0.0, f32::max);
-            assert!(max_disp <= prev_max + EPSILON, "solver diverged: {max_disp} > {prev_max}");
+            assert!(
+                max_disp <= prev_max + EPSILON,
+                "solver diverged: {max_disp} > {prev_max}"
+            );
             prev_max = max_disp;
         }
         // After 20 iterations, per-iteration displacement should be small

@@ -119,7 +119,11 @@ fn main() {
     }
 
     let mut sorted: Vec<_> = spans.into_iter().collect();
-    sorted.sort_by(|a, b| b.1.total().partial_cmp(&a.1.total()).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| {
+        b.1.total()
+            .partial_cmp(&a.1.total())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     println!("name,calls,total_us,mean_us,median_us,max_us,min_us");
     for (name, stats) in &sorted {

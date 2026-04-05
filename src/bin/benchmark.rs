@@ -1,25 +1,29 @@
 use bevy::app::ScheduleRunnerPlugin;
 use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
+use bevy::time::TimeUpdateStrategy;
 use std::time::Duration;
 
-use bevy_scratchpad::config::{DemoConfig, PhysicsParams, PHYSICS_HZ};
-use bevy_scratchpad::physics::soft_body::{spawn_soft_body, WorldBounds};
-use bevy_scratchpad::physics::systems::MouseEffector;
+use bevy_scratchpad::config::{DemoConfig, PHYSICS_HZ, PhysicsParams};
 use bevy_scratchpad::physics::PhysicsCorePlugin;
+use bevy_scratchpad::physics::soft_body::{WorldBounds, spawn_soft_body};
+use bevy_scratchpad::physics::systems::MouseEffector;
 
-const BENCHMARK_FRAMES: u32 = 300;
-const SIMULATED_FPS: f64 = 60.0;
 const HALF_WIDTH: f32 = 640.0;
 const HALF_HEIGHT: f32 = 360.0;
 
-// NOTE: ScheduleRunnerPlugin uses wall-clock sleep between frames. Under heavy
-// CPU load, frame deltas may exceed 1/SIMULATED_FPS, causing extra FixedUpdate
-// substeps. For consistent results, run on an idle machine. Trace timings
-// reflect real wall-clock cost, which is what we want for optimization work.
+fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
 
 fn main() {
-    // Direct trace output to traces/ directory
+    let num_points: usize = env_or("NUM_POINTS", 16);
+    let benchmark_frames: u32 = env_or("BENCH_FRAMES", 300);
+    let deterministic: bool = env_or("DETERMINISTIC", true);
+
     std::fs::create_dir_all("traces").ok();
     // SAFETY: called before App::new() — no threads exist yet
     unsafe {
@@ -28,11 +32,20 @@ fn main() {
 
     let mut app = App::new();
 
-    app.add_plugins(
-        MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
-            1.0 / SIMULATED_FPS,
-        ))),
-    );
+    if deterministic {
+        // Manual stepping — no wall-clock sleep, no catch-up jitter.
+        // ManualDuration tells Bevy's time_system to advance Time<Real> by
+        // exactly this amount each update, which flows through to
+        // Time<Virtual> → Time<Fixed> accumulation deterministically.
+        let frame_dt = Duration::from_secs_f64(1.0 / 60.0);
+        app.add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_once()));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(frame_dt));
+    } else {
+        // Legacy path: wall-clock sleep (noisy but closer to real app behavior)
+        app.add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(
+            Duration::from_secs_f64(1.0 / 60.0),
+        )));
+    }
 
     #[cfg(feature = "profile")]
     app.add_plugins(bevy::log::LogPlugin::default());
@@ -41,12 +54,51 @@ fn main() {
         .insert_resource(WorldBounds {
             half: Vec2::new(HALF_WIDTH, HALF_HEIGHT),
         })
+        .insert_resource(DemoConfig {
+            num_points,
+            ..Default::default()
+        })
         .init_resource::<ButtonInput<MouseButton>>()
         .add_plugins(PhysicsCorePlugin)
         .add_systems(Startup, spawn_benchmark_scene)
         .add_systems(Update, (scripted_effector, auto_quit));
 
-    app.run();
+    if deterministic {
+        eprintln!(
+            "Deterministic benchmark: {} points, {} frames",
+            num_points, benchmark_frames
+        );
+
+        // Startup frame (spawns entities)
+        app.update();
+
+        let start = std::time::Instant::now();
+        for _ in 0..benchmark_frames {
+            app.update();
+        }
+        let elapsed = start.elapsed();
+
+        println!("Benchmark complete: {benchmark_frames} frames, {num_points} points");
+        println!(
+            "Wall time: {:.3}ms total, {:.3}ms/frame, {:.1} simulated FPS headroom",
+            elapsed.as_secs_f64() * 1000.0,
+            elapsed.as_secs_f64() * 1000.0 / benchmark_frames as f64,
+            benchmark_frames as f64 / elapsed.as_secs_f64(),
+        );
+    } else {
+        eprintln!(
+            "Legacy benchmark (wall-clock): {} points, {} frames",
+            num_points, benchmark_frames
+        );
+        app.insert_resource(BenchmarkConfig { benchmark_frames });
+        app.run();
+    }
+}
+
+/// Config resource for legacy (non-deterministic) auto-quit
+#[derive(Resource)]
+struct BenchmarkConfig {
+    benchmark_frames: u32,
 }
 
 fn spawn_benchmark_scene(
@@ -76,10 +128,12 @@ fn scripted_effector(
     frame: Res<FrameCount>,
     mut effector: ResMut<MouseEffector>,
     mut buttons: ResMut<ButtonInput<MouseButton>>,
+    config: Option<Res<BenchmarkConfig>>,
 ) {
-    let t = frame.0 as f32 / SIMULATED_FPS as f32;
+    let benchmark_frames = config.map_or(300, |c| c.benchmark_frames);
+    let t = frame.0 as f32 / 60.0;
     let sweep_radius = 80.0;
-    let angular_speed = 2.0; // radians per second
+    let angular_speed = 2.0;
 
     let angle = t * angular_speed;
     let pos = Vec2::new(angle.cos(), angle.sin()) * sweep_radius;
@@ -87,8 +141,7 @@ fn scripted_effector(
     effector.prev = effector.curr;
     effector.curr = pos;
 
-    // Press mouse button for the middle third of the benchmark
-    let progress = frame.0 as f32 / BENCHMARK_FRAMES as f32;
+    let progress = frame.0 as f32 / benchmark_frames as f32;
     if (0.33..0.66).contains(&progress) {
         buttons.press(MouseButton::Left);
     } else {
@@ -96,8 +149,15 @@ fn scripted_effector(
     }
 }
 
-fn auto_quit(frame: Res<FrameCount>, mut exit: MessageWriter<AppExit>) {
-    if frame.0 >= BENCHMARK_FRAMES {
+fn auto_quit(
+    frame: Res<FrameCount>,
+    mut exit: MessageWriter<AppExit>,
+    config: Option<Res<BenchmarkConfig>>,
+) {
+    // Only used in legacy (non-deterministic) mode
+    if let Some(cfg) = config
+        && frame.0 >= cfg.benchmark_frames
+    {
         println!("Benchmark complete: {} frames", frame.0);
         exit.write(AppExit::Success);
     }

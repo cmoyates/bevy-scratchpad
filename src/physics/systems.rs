@@ -42,10 +42,10 @@ pub fn exit_on_esc_or_q_if_native(
     keys: Res<ButtonInput<KeyCode>>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    if cfg!(not(target_arch = "wasm32"))
-        && keys.any_just_pressed([KeyCode::Escape, KeyCode::KeyQ]) {
-            exit.write(AppExit::Success);
-        }
+    if cfg!(not(target_arch = "wasm32")) && keys.any_just_pressed([KeyCode::Escape, KeyCode::KeyQ])
+    {
+        exit.write(AppExit::Success);
+    }
 }
 
 /// Update the cursor's world position each frame (2D camera).
@@ -62,9 +62,9 @@ pub fn update_cursor_world(
     };
     if let Some(screen_pos) = window.cursor_position()
         && let Ok((camera, cam_xform)) = q_cam.single()
-            && let Ok(world_pos) = camera.viewport_to_world_2d(cam_xform, screen_pos) {
-                cursor.0 = world_pos;
-                effector.curr = world_pos;
-            }
+        && let Ok(world_pos) = camera.viewport_to_world_2d(cam_xform, screen_pos)
+    {
+        cursor.0 = world_pos;
+        effector.curr = world_pos;
+    }
 }
-
