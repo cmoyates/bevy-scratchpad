@@ -16,6 +16,7 @@ use crate::physics::systems::{
 };
 
 pub mod debug;
+pub mod outline_render;
 
 /// Core physics: resources + FixedUpdate systems. No rendering, no window.
 pub struct PhysicsCorePlugin;
@@ -39,8 +40,14 @@ pub struct PhysicsRenderPlugin;
 impl Plugin for PhysicsRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CursorWorld>()
-            .init_resource::<debug::OutlineCache>()
-            .add_systems(Startup, (spawn_demo_like_python, debug::spawn_outline_mesh))
+            .init_resource::<outline_render::OutlineScratch>()
+            .add_plugins(bevy::sprite_render::Material2dPlugin::<
+                outline_render::OutlineMaterial,
+            >::default())
+            .add_systems(
+                Startup,
+                (spawn_demo_like_python, outline_render::spawn_ssbo_outline),
+            )
             .add_systems(
                 Update,
                 (
@@ -48,7 +55,7 @@ impl Plugin for PhysicsRenderPlugin {
                     systems::update_cursor_world,
                     debug::draw_effector_gizmo,
                     systems::exit_on_esc_or_q_if_native,
-                    debug::update_outline_mesh,
+                    outline_render::update_ssbo_outline,
                 ),
             );
     }

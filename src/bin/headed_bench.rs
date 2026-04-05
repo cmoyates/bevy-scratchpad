@@ -43,7 +43,7 @@ fn main() {
 
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
-            title: format!("Headed Bench — {num_points} points").into(),
+            title: format!("Headed Bench — {num_points} points"),
             resolution: (1280u32, 720u32).into(),
             ..default()
         }),
