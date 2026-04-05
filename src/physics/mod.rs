@@ -16,18 +16,28 @@ use crate::physics::systems::{
 
 pub mod debug;
 
-/// Plug this into your App with `.add_plugins(PhysicsPlugin)`.
-pub struct PhysicsPlugin;
+/// Core physics: resources + FixedUpdate systems. No rendering, no window.
+pub struct PhysicsCorePlugin;
 
-impl Plugin for PhysicsPlugin {
+impl Plugin for PhysicsCorePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PhysicsParams>()
             .init_resource::<DemoConfig>()
             .init_resource::<WorldBounds>()
-            .init_resource::<CursorWorld>()
             .init_resource::<MouseEffector>()
             .insert_resource(OutlineDirty(true))
             .init_resource::<SubstepCounter>()
+            .add_systems(Update, reset_substep_counter)
+            .add_systems(FixedUpdate, softbody_step);
+    }
+}
+
+/// Rendering, input, and debug visualization. Requires a window.
+pub struct PhysicsRenderPlugin;
+
+impl Plugin for PhysicsRenderPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<CursorWorld>()
             .init_resource::<debug::OutlineCache>()
             .add_systems(Startup, spawn_demo_like_python)
             .add_systems(
@@ -37,11 +47,18 @@ impl Plugin for PhysicsPlugin {
                     systems::update_cursor_world,
                     debug::draw_effector_gizmo,
                     systems::exit_on_esc_or_q_if_native,
-                    reset_substep_counter,
                     debug::rebuild_outline_cache,
                     debug::draw_blob_outline,
                 ),
-            )
-            .add_systems(FixedUpdate, softbody_step);
+            );
+    }
+}
+
+/// Convenience: adds both core physics and rendering.
+pub struct PhysicsPlugin;
+
+impl Plugin for PhysicsPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins((PhysicsCorePlugin, PhysicsRenderPlugin));
     }
 }

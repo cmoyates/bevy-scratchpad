@@ -1,4 +1,5 @@
 /target
 /webdist
+/traces
 
 .DS_Store

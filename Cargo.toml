@@ -20,6 +20,25 @@ bevy = { version = "0.18.1", default-features = false, features = [
   "bevy_gizmos_render"
 ]}
 rand = "0.10.0"
+tracing = "0.1"
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+
+[features]
+profile = ["bevy/trace", "bevy/trace_chrome", "bevy/bevy_log", "dep:serde", "dep:serde_json"]
+
+[[bin]]
+name = "bevy-scratchpad"
+path = "src/main.rs"
+
+[[bin]]
+name = "benchmark"
+path = "src/bin/benchmark.rs"
+
+[[bin]]
+name = "summarize-trace"
+path = "src/bin/summarize_trace.rs"
+required-features = ["profile"]
 
 # --- WASM-specific deps (needed for the rand/getrandom stack in browsers) ---
 [target.'cfg(target_arch = "wasm32")'.dependencies]

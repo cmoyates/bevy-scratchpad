@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
+use tracing::info_span;
+
 use super::point::Point;
 use crate::config::{DemoConfig, PhysicsParams, PHYSICS_HZ};
 use crate::physics::solver::{self, EffectorInput};
@@ -55,12 +57,15 @@ pub fn update_world_bounds(
     }
 }
 
-/// Spawn a soft body as a ring (n-gon) around `center`, each point with the same initial velocity.
-/// Returns the SoftBody entity.
+/// Visual assets for rendering soft body points. Pass `None` for headless.
+pub struct SoftBodyVisuals {
+    pub mesh: Handle<Mesh>,
+    pub material: Handle<ColorMaterial>,
+}
+
+/// Spawn a soft body ring. Pass `Some(visuals)` for rendered, `None` for headless.
 pub fn spawn_soft_body(
     commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<ColorMaterial>,
     center: Vec2,
     num_points: usize,
     ring_radius: f32,
@@ -70,14 +75,9 @@ pub fn spawn_soft_body(
     particle_vis_radius: f32,
     mass: f32,
     bounciness: f32,
+    visuals: Option<&SoftBodyVisuals>,
 ) -> Entity {
-    // visual for each point
-    let mesh = meshes.add(Circle::new(particle_vis_radius));
-    let mat = materials.add(Color::srgb(0.2, 0.7, 1.0));
-
-    // encode v0 in previous_position with the fixed dt
     let dt = 1.0 / PHYSICS_HZ as f32;
-
     let mut soft = SoftBody::new(num_points, ring_radius, puffiness);
 
     for i in 0..num_points {
@@ -90,17 +90,19 @@ pub fn spawn_soft_body(
         point.bounciness = bounciness;
         point.acceleration = gravity;
 
-        let e = commands
-            .spawn((
-                // render
-                Mesh2d(mesh.clone()),
-                MeshMaterial2d(mat.clone()),
-                Transform::from_xyz(curr.x, curr.y, 0.0),
-                Visibility::Hidden, // hide individual point sprites
-                // physics
-                point,
-            ))
-            .id();
+        let e = if let Some(vis) = visuals {
+            commands
+                .spawn((
+                    Mesh2d(vis.mesh.clone()),
+                    MeshMaterial2d(vis.material.clone()),
+                    Transform::from_xyz(curr.x, curr.y, 0.0),
+                    Visibility::Hidden,
+                    point,
+                ))
+                .id()
+        } else {
+            commands.spawn(point).id()
+        };
 
         soft.points.push(e);
     }
@@ -128,10 +130,13 @@ pub fn spawn_demo_like_python(
     // Python used top-left origin; Bevy 2D uses center origin with +Y up.
     let origin_world = Vec2::new(0.0, half.y - (win.height() / 3.0));
 
+    let visuals = SoftBodyVisuals {
+        mesh: meshes.add(Circle::new(demo.particle_vis_radius)),
+        material: materials.add(Color::srgb(0.2, 0.7, 1.0)),
+    };
+
     spawn_soft_body(
         &mut commands,
-        &mut meshes,
-        &mut materials,
         origin_world,
         demo.num_points,
         demo.ring_radius,
@@ -141,6 +146,7 @@ pub fn spawn_demo_like_python(
         demo.particle_vis_radius,
         demo.default_mass,
         demo.default_bounciness,
+        Some(&visuals),
     );
 }
 
@@ -162,16 +168,21 @@ pub fn softbody_step(
     mut outline_dirty: ResMut<crate::physics::systems::OutlineDirty>,
     mut substeps: ResMut<SubstepCounter>,
 ) {
+    let _span = info_span!("softbody_step").entered();
+
     let dt = time.delta_secs();
     let half = bounds.half;
     let damping_per_tick = physics.damping_per_second.powf(dt);
 
     for soft in &mut q_soft {
-        for &e in &soft.points {
-            if let Ok(mut p) = q_points.get_mut(e) {
-                p.acceleration += physics.gravity;
-                p.verlet_step(dt, damping_per_tick);
-                p.bounce_in_bounds(half);
+        {
+            let _span = info_span!("verlet_integration").entered();
+            for &e in &soft.points {
+                if let Ok(mut p) = q_points.get_mut(e) {
+                    p.acceleration += physics.gravity;
+                    p.verlet_step(dt, damping_per_tick);
+                    p.bounce_in_bounds(half);
+                }
             }
         }
 
@@ -180,49 +191,54 @@ pub fn softbody_step(
         }
         substeps.0 += 1;
 
-        pos_buf.clear();
-        for &e in &soft.points {
-            let pos = q_points.get(e).map(|p| p.position).unwrap_or(Vec2::ZERO);
-            pos_buf.push(pos);
-        }
+        {
+            let _span = info_span!("constraint_solve").entered();
 
-        let effector_input = EffectorInput {
-            active: buttons.pressed(MouseButton::Left),
-            prev: effector.prev,
-            curr: effector.curr,
-            radius: effector.radius,
-        };
+            pos_buf.clear();
+            for &e in &soft.points {
+                let pos = q_points.get(e).map(|p| p.position).unwrap_or(Vec2::ZERO);
+                pos_buf.push(pos);
+            }
 
-        let mut any_moved = false;
-        for _ in 0..physics.constraint_iterations {
-            let result = solver::solve_iteration(
-                &mut pos_buf,
-                soft.chord_length,
-                soft.desired_area,
-                soft.circumference,
-                &effector_input,
-                &mut disp_accum_buf,
-                &mut disp_weight_buf,
-                &mut corrections_buf,
-            );
-            any_moved |= result.any_moved;
-        }
+            let effector_input = EffectorInput {
+                active: buttons.pressed(MouseButton::Left),
+                prev: effector.prev,
+                curr: effector.curr,
+                radius: effector.radius,
+            };
 
-        if any_moved {
-            outline_dirty.0 = true;
-            // Write solved positions back to ECS
-            for (i, &e) in soft.points.iter().enumerate() {
-                if let Ok(mut p) = q_points.get_mut(e) {
-                    p.position = pos_buf[i];
+            let mut any_moved = false;
+            for _ in 0..physics.constraint_iterations {
+                let result = solver::solve_iteration(
+                    &mut pos_buf,
+                    soft.chord_length,
+                    soft.desired_area,
+                    soft.circumference,
+                    &effector_input,
+                    &mut disp_accum_buf,
+                    &mut disp_weight_buf,
+                    &mut corrections_buf,
+                );
+                any_moved |= result.any_moved;
+            }
+
+            if any_moved {
+                outline_dirty.0 = true;
+                for (i, &e) in soft.points.iter().enumerate() {
+                    if let Ok(mut p) = q_points.get_mut(e) {
+                        p.position = pos_buf[i];
+                    }
                 }
             }
         }
 
-        // --- 3) Write back to Transform for rendering
-        for &e in &soft.points {
-            if let (Ok(p), Ok(mut tf)) = (q_points.get_mut(e), q_tf.get_mut(e)) {
-                tf.translation.x = p.position.x;
-                tf.translation.y = p.position.y;
+        {
+            let _span = info_span!("transform_writeback").entered();
+            for &e in &soft.points {
+                if let (Ok(p), Ok(mut tf)) = (q_points.get_mut(e), q_tf.get_mut(e)) {
+                    tf.translation.x = p.position.x;
+                    tf.translation.y = p.position.y;
+                }
             }
         }
     }
