@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+pub mod geometry;
 pub mod point;
 pub mod soft_body;
 pub use soft_body::WorldBounds;

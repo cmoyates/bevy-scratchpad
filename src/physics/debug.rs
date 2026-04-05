@@ -4,7 +4,8 @@ use bevy::prelude::*;
 
 use crate::physics::point::Point;
 use crate::physics::soft_body::SoftBody;
-use crate::physics::systems::{OutlineDirty, chaikin_closed_once};
+use crate::physics::geometry::chaikin_closed_once;
+use crate::physics::systems::OutlineDirty;
 
 /// Cached smoothed outline vertices, rebuilt when dirty.
 #[derive(Resource, Default)]

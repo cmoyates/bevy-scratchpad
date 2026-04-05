@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::config::MOUSE_RADIUS;
+use crate::physics::geometry::collide_point_with_swept_effector;
 use crate::physics::point::Point;
 use bevy::window::PrimaryWindow;
 
@@ -87,42 +88,3 @@ impl Default for EffectorState {
     }
 }
 
-#[inline]
-pub(crate) fn collide_point_with_swept_effector(p: &mut Vec2, seg_a: Vec2, seg_b: Vec2, r: f32) {
-    let seg = seg_b - seg_a;
-    let seg_len2 = seg.length_squared();
-    if seg_len2 <= 1e-12 {
-        let d = *p - seg_b;
-        let d2 = d.length_squared();
-        if d2 < r * r && d2 > 1e-12 {
-            *p = seg_b + d.normalize() * r;
-        }
-        return;
-    }
-    let t = (*p - seg_a).dot(seg) / seg_len2;
-    let t = t.clamp(0.0, 1.0);
-    let q = seg_a + t * seg;
-
-    let d = *p - q;
-    let d2 = d.length_squared();
-    if d2 < r * r && d2 > 1e-12 {
-        *p = q + d.normalize() * r;
-    }
-}
-
-/// One-pass Chaikin smoothing for a closed polygon ring.
-pub fn chaikin_closed_once(input: &[Vec2], out: &mut Vec<Vec2>) {
-    out.clear();
-    let n = input.len();
-    if n < 3 {
-        out.extend_from_slice(input);
-        return;
-    }
-    out.reserve(n * 2);
-    for i in 0..n {
-        let a = input[i];
-        let b = input[(i + 1) % n];
-        out.push(a.lerp(b, 0.25));
-        out.push(a.lerp(b, 0.75));
-    }
-}
