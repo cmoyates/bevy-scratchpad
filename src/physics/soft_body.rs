@@ -57,61 +57,14 @@ pub fn update_world_bounds(
     }
 }
 
-/// Spawn a soft body as a ring (n-gon) around `center`, each point with the same initial velocity.
-/// Returns the SoftBody entity.
-pub fn spawn_soft_body(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<ColorMaterial>,
-    center: Vec2,
-    num_points: usize,
-    ring_radius: f32,
-    puffiness: f32,
-    initial_vel: Vec2,
-    gravity: Vec2,
-    particle_vis_radius: f32,
-    mass: f32,
-    bounciness: f32,
-) -> Entity {
-    // visual for each point
-    let mesh = meshes.add(Circle::new(particle_vis_radius));
-    let mat = materials.add(Color::srgb(0.2, 0.7, 1.0));
-
-    // encode v0 in previous_position with the fixed dt
-    let dt = 1.0 / PHYSICS_HZ as f32;
-
-    let mut soft = SoftBody::new(num_points, ring_radius, puffiness);
-
-    for i in 0..num_points {
-        let theta = (i as f32) * std::f32::consts::TAU / (num_points as f32);
-        let curr = center + Vec2::new(theta.cos(), theta.sin()) * ring_radius;
-
-        let mut point = Point::with_initial_velocity(curr, initial_vel, dt, i);
-        point.mass = mass;
-        point.radius = particle_vis_radius;
-        point.bounciness = bounciness;
-        point.acceleration = gravity;
-
-        let e = commands
-            .spawn((
-                // render
-                Mesh2d(mesh.clone()),
-                MeshMaterial2d(mat.clone()),
-                Transform::from_xyz(curr.x, curr.y, 0.0),
-                Visibility::Hidden, // hide individual point sprites
-                // physics
-                point,
-            ))
-            .id();
-
-        soft.points.push(e);
-    }
-
-    commands.spawn(soft).id()
+/// Visual assets for rendering soft body points. Pass `None` for headless.
+pub struct SoftBodyVisuals {
+    pub mesh: Handle<Mesh>,
+    pub material: Handle<ColorMaterial>,
 }
 
-/// Spawn a soft body without visual components (headless benchmarking).
-pub fn spawn_soft_body_headless(
+/// Spawn a soft body ring. Pass `Some(visuals)` for rendered, `None` for headless.
+pub fn spawn_soft_body(
     commands: &mut Commands,
     center: Vec2,
     num_points: usize,
@@ -122,6 +75,7 @@ pub fn spawn_soft_body_headless(
     particle_vis_radius: f32,
     mass: f32,
     bounciness: f32,
+    visuals: Option<&SoftBodyVisuals>,
 ) -> Entity {
     let dt = 1.0 / PHYSICS_HZ as f32;
     let mut soft = SoftBody::new(num_points, ring_radius, puffiness);
@@ -136,7 +90,20 @@ pub fn spawn_soft_body_headless(
         point.bounciness = bounciness;
         point.acceleration = gravity;
 
-        let e = commands.spawn(point).id();
+        let e = if let Some(vis) = visuals {
+            commands
+                .spawn((
+                    Mesh2d(vis.mesh.clone()),
+                    MeshMaterial2d(vis.material.clone()),
+                    Transform::from_xyz(curr.x, curr.y, 0.0),
+                    Visibility::Hidden,
+                    point,
+                ))
+                .id()
+        } else {
+            commands.spawn(point).id()
+        };
+
         soft.points.push(e);
     }
 
@@ -163,10 +130,13 @@ pub fn spawn_demo_like_python(
     // Python used top-left origin; Bevy 2D uses center origin with +Y up.
     let origin_world = Vec2::new(0.0, half.y - (win.height() / 3.0));
 
+    let visuals = SoftBodyVisuals {
+        mesh: meshes.add(Circle::new(demo.particle_vis_radius)),
+        material: materials.add(Color::srgb(0.2, 0.7, 1.0)),
+    };
+
     spawn_soft_body(
         &mut commands,
-        &mut meshes,
-        &mut materials,
         origin_world,
         demo.num_points,
         demo.ring_radius,
@@ -176,6 +146,7 @@ pub fn spawn_demo_like_python(
         demo.particle_vis_radius,
         demo.default_mass,
         demo.default_bounciness,
+        Some(&visuals),
     );
 }
 

@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use std::time::Duration;
 
 use bevy_scratchpad::config::{DemoConfig, PhysicsParams, PHYSICS_HZ};
-use bevy_scratchpad::physics::soft_body::{spawn_soft_body_headless, WorldBounds};
+use bevy_scratchpad::physics::soft_body::{spawn_soft_body, WorldBounds};
 use bevy_scratchpad::physics::systems::MouseEffector;
 use bevy_scratchpad::physics::PhysicsCorePlugin;
 
@@ -50,9 +50,9 @@ fn spawn_benchmark_scene(
     demo: Res<DemoConfig>,
     physics: Res<PhysicsParams>,
 ) {
-    let center = Vec2::new(0.0, HALF_HEIGHT - (HALF_HEIGHT * 2.0 / 3.0));
+    let center = Vec2::new(0.0, HALF_HEIGHT / 3.0);
 
-    spawn_soft_body_headless(
+    spawn_soft_body(
         &mut commands,
         center,
         demo.num_points,
@@ -63,6 +63,7 @@ fn spawn_benchmark_scene(
         demo.particle_vis_radius,
         demo.default_mass,
         demo.default_bounciness,
+        None,
     );
 }
 
