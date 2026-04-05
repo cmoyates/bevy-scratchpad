@@ -17,6 +17,7 @@ const HALF_HEIGHT: f32 = 360.0;
 fn main() {
     // Direct trace output to traces/ directory
     std::fs::create_dir_all("traces").ok();
+    // SAFETY: called before App::new() — no threads exist yet
     unsafe {
         std::env::set_var("TRACE_CHROME", "traces/trace.json");
     }
