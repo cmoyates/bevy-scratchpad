@@ -10,9 +10,13 @@ use bevy_scratchpad::physics::PhysicsCorePlugin;
 
 const BENCHMARK_FRAMES: u32 = 300;
 const SIMULATED_FPS: f64 = 60.0;
-// Canonical window size for deterministic bounds
 const HALF_WIDTH: f32 = 640.0;
 const HALF_HEIGHT: f32 = 360.0;
+
+// NOTE: ScheduleRunnerPlugin uses wall-clock sleep between frames. Under heavy
+// CPU load, frame deltas may exceed 1/SIMULATED_FPS, causing extra FixedUpdate
+// substeps. For consistent results, run on an idle machine. Trace timings
+// reflect real wall-clock cost, which is what we want for optimization work.
 
 fn main() {
     // Direct trace output to traces/ directory
