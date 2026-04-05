@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use super::point::Point;
-use crate::config::*;
+use crate::config::{DemoConfig, PhysicsParams, PHYSICS_HZ};
 use crate::physics::solver::{self, EffectorInput};
 use crate::physics::systems::MouseEffector;
 use crate::physics::systems::SubstepCounter;
@@ -64,6 +64,7 @@ pub fn spawn_soft_body(
     center: Vec2,
     num_points: usize,
     ring_radius: f32,
+    puffiness: f32,
     initial_vel: Vec2,
     gravity: Vec2,
     particle_vis_radius: f32,
@@ -77,7 +78,7 @@ pub fn spawn_soft_body(
     // encode v0 in previous_position with the fixed dt
     let dt = 1.0 / PHYSICS_HZ as f32;
 
-    let mut soft = SoftBody::new(num_points, ring_radius, PUFFINESS);
+    let mut soft = SoftBody::new(num_points, ring_radius, puffiness);
 
     for i in 0..num_points {
         let theta = (i as f32) * std::f32::consts::TAU / (num_points as f32);
@@ -114,8 +115,9 @@ pub fn spawn_demo_like_python(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    demo: Res<DemoConfig>,
+    physics: Res<PhysicsParams>,
 ) {
-    // camera (if you already spawn one elsewhere, remove this)
     commands.spawn(Camera2d);
 
     let Ok(win) = windows.single() else {
@@ -124,9 +126,6 @@ pub fn spawn_demo_like_python(
     let half = 0.5 * win.size();
 
     // Python used top-left origin; Bevy 2D uses center origin with +Y up.
-    // Python origin = (WIDTH/2, HEIGHT/3)  →  Bevy world:
-    // x: centered ⇒ 0.0
-    // y: move down from top by HEIGHT/3  ⇒  +half.y (top) - HEIGHT/3
     let origin_world = Vec2::new(0.0, half.y - (win.height() / 3.0));
 
     spawn_soft_body(
@@ -134,21 +133,23 @@ pub fn spawn_demo_like_python(
         &mut meshes,
         &mut materials,
         origin_world,
-        NUM_POINTS,
-        RING_RADIUS,
-        INITIAL_VEL,
-        GRAVITY,
-        PARTICLE_VIS_RADIUS,
-        DEFAULT_MASS,
-        DEFAULT_BOUNCINESS,
+        demo.num_points,
+        demo.ring_radius,
+        demo.puffiness,
+        demo.initial_vel,
+        physics.gravity,
+        demo.particle_vis_radius,
+        demo.default_mass,
+        demo.default_bounciness,
     );
 }
 
 /// Fixed-timestep integration: Verlet with per-second damping, then
 /// PBD-style constraints (distance + area), then write positions to `Transform`.
 pub fn softbody_step(
-    time: Res<Time>, // fixed clock in FixedUpdate
+    time: Res<Time>,
     bounds: Res<WorldBounds>,
+    physics: Res<PhysicsParams>,
     mut q_points: Query<&mut Point>,
     mut q_tf: Query<&mut Transform>,
     mut q_soft: Query<&mut SoftBody>,
@@ -163,28 +164,22 @@ pub fn softbody_step(
 ) {
     let dt = time.delta_secs();
     let half = bounds.half;
-
-    // Convert per-second damping to per-tick factor (frame-rate independent).
-    // We scale the Verlet velocity-like term (x_t - x_{t-1}) by this factor.
-    let damping_per_tick = DAMPING_PER_SECOND.powf(dt);
+    let damping_per_tick = physics.damping_per_second.powf(dt);
 
     for soft in &mut q_soft {
-        // --- 1) Verlet integrate all points; add gravity EACH tick; bounce on window AABB
         for &e in &soft.points {
             if let Ok(mut p) = q_points.get_mut(e) {
-                p.acceleration += GRAVITY;
+                p.acceleration += physics.gravity;
                 p.verlet_step(dt, damping_per_tick);
                 p.bounce_in_bounds(half);
             }
         }
 
-        // --- 2) Constraint solve (Gauss–Seidel): distance + area (dilation)
-        if substeps.0 >= MAX_SUBSTEPS_PER_FRAME {
+        if substeps.0 >= physics.max_substeps_per_frame {
             break;
         }
         substeps.0 += 1;
 
-        // Extract positions from ECS into contiguous buffer for solver
         pos_buf.clear();
         for &e in &soft.points {
             let pos = q_points.get(e).map(|p| p.position).unwrap_or(Vec2::ZERO);
@@ -199,7 +194,7 @@ pub fn softbody_step(
         };
 
         let mut any_moved = false;
-        for _ in 0..CONSTRAINT_ITERATIONS {
+        for _ in 0..physics.constraint_iterations {
             let result = solver::solve_iteration(
                 &mut pos_buf,
                 soft.chord_length,

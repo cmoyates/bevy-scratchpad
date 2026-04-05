@@ -9,6 +9,7 @@ pub mod systems;
 
 use soft_body::{softbody_step, spawn_demo_like_python, update_world_bounds};
 
+use crate::config::{DemoConfig, PhysicsParams};
 use crate::physics::systems::{
     CursorWorld, MouseEffector, OutlineDirty, SubstepCounter, reset_substep_counter,
 };
@@ -20,7 +21,9 @@ pub struct PhysicsPlugin;
 
 impl Plugin for PhysicsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WorldBounds>()
+        app.init_resource::<PhysicsParams>()
+            .init_resource::<DemoConfig>()
+            .init_resource::<WorldBounds>()
             .init_resource::<CursorWorld>()
             .init_resource::<MouseEffector>()
             .insert_resource(OutlineDirty(true))
