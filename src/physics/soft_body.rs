@@ -282,12 +282,11 @@ pub fn softbody_step(
                     continue;
                 }
                 let avg = disp_accum_buf[i] / (disp_weight_buf[i] as f32);
-                if let Ok(mut p) = q_points.get_mut(soft.points[i]) {
-                    if avg.x != 0.0 || avg.y != 0.0 {
+                if let Ok(mut p) = q_points.get_mut(soft.points[i])
+                    && (avg.x != 0.0 || avg.y != 0.0) {
                         p.position += avg;
                         any_moved = true;
                     }
-                }
             }
 
             // 2d) Interleave effector collision as a projection pass (PBD contact)

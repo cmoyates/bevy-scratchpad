@@ -1,21 +1,20 @@
 use crate::config::MOUSE_RADIUS;
-use crate::physics::systems::CursorWorld; // where you defined CursorWorld
-use bevy::prelude::Projection;
+use crate::physics::systems::CursorWorld;
 use bevy::prelude::*;
-use bevy::render::camera::{ClearColorConfig, OrthographicProjection, ScalingMode};
-use bevy_polyline::polyline::Polyline as PolylineAsset;
-use bevy_polyline::prelude::*;
 
-/// Marker for the single blob outline polyline entity.
-#[derive(Component)]
-pub struct BlobOutline;
+use crate::physics::point::Point;
+use crate::physics::soft_body::SoftBody;
+use crate::physics::systems::{OutlineDirty, chaikin_closed_once};
+
+/// Cached smoothed outline vertices, rebuilt when dirty.
+#[derive(Resource, Default)]
+pub struct OutlineCache(pub Vec<Vec2>);
 
 pub fn draw_effector_gizmo(
     mut gizmos: Gizmos,
     cursor: Res<CursorWorld>,
     buttons: Res<ButtonInput<MouseButton>>,
 ) {
-    // Alpha 0.25 when not pressed, 1.0 when left mouse is pressed
     let alpha = if buttons.pressed(MouseButton::Left) {
         1.0
     } else {
@@ -24,52 +23,45 @@ pub fn draw_effector_gizmo(
     gizmos.circle_2d(cursor.0, MOUSE_RADIUS, Color::srgba(1.0, 0.0, 0.0, alpha));
 }
 
-/// Spawn a persistent empty polyline and material; we'll update the vertices each physics tick.
-pub fn spawn_blob_outline(
-    mut commands: Commands,
-    mut lines: ResMut<Assets<PolylineAsset>>,
-    mut mats: ResMut<Assets<PolylineMaterial>>,
+/// Rebuild the cached outline when physics marks it dirty.
+pub fn rebuild_outline_cache(
+    q_soft: Query<&SoftBody>,
+    q_points: Query<&Point>,
+    mut dirty: ResMut<OutlineDirty>,
+    mut cache: ResMut<OutlineCache>,
 ) {
-    let line_handle = lines.add(PolylineAsset {
-        vertices: Vec::new(),
-    });
-    let mat_handle = mats.add(PolylineMaterial {
-        width: 3.0,
-        color: LinearRgba::WHITE,
-        perspective: false,
-        depth_bias: -0.001,
-    });
+    if !dirty.0 {
+        return;
+    }
+    dirty.0 = false;
 
-    commands.spawn((
-        BlobOutline,
-        PolylineBundle {
-            polyline: PolylineHandle(line_handle),
-            material: PolylineMaterialHandle(mat_handle),
-            transform: Transform::from_xyz(0.0, 0.0, 1.0),
-            ..default()
-        },
-    ));
+    let Some(soft) = q_soft.iter().next() else {
+        return;
+    };
+
+    let mut ring: Vec<Vec2> = Vec::with_capacity(soft.num_points);
+    for &e in &soft.points {
+        if let Ok(p) = q_points.get(e) {
+            ring.push(p.position);
+        }
+    }
+
+    let mut smooth: Vec<Vec2> = Vec::with_capacity(ring.len() * 2);
+    chaikin_closed_once(&ring, &mut smooth);
+    let src = if smooth.len() >= 3 { &smooth } else { &ring };
+
+    cache.0.clear();
+    cache.0.extend_from_slice(src);
+    // Close the loop
+    if let Some(&first) = src.first() {
+        cache.0.push(first);
+    }
 }
 
-// (removed temporary gizmo outline)
-
-// removed temporary test polyline
-
-/// Spawn a 3D camera so bevy_polyline's 3D render graph is active and overlays the 2D scene.
-pub fn spawn_polyline_camera_3d(mut commands: Commands) {
-    commands.spawn((
-        Camera3d::default(),
-        Camera {
-            order: 1, // render after the 2D camera
-            clear_color: ClearColorConfig::None,
-            ..default()
-        },
-        Projection::Orthographic(OrthographicProjection {
-            scaling_mode: ScalingMode::WindowSize,
-            near: -1000.0,
-            far: 1000.0,
-            ..OrthographicProjection::default_2d()
-        }),
-        Transform::from_xyz(0.0, 0.0, 1000.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
+/// Draw the cached outline using gizmos (runs every frame, cheap if cache unchanged).
+pub fn draw_blob_outline(mut gizmos: Gizmos, cache: Res<OutlineCache>) {
+    if cache.0.len() < 2 {
+        return;
+    }
+    gizmos.linestrip_2d(cache.0.iter().copied(), Color::WHITE);
 }
