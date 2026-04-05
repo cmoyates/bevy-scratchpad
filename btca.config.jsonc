@@ -1,19 +1,26 @@
 {
   "$schema": "https://btca.dev/btca.schema.json",
-  "model": "claude-haiku-4.5",
-  "provider": "github-copilot",
   "resources": [
     {
-      "name": "bevy",
       "type": "git",
+      "name": "bevy",
       "url": "https://github.com/bevyengine/bevy",
       "branch": "release-0.18.1"
     },
     {
-      "name": "bevy-website",
       "type": "git",
+      "name": "bevy-website",
       "url": "https://github.com/bevyengine/bevy-website",
       "branch": "main"
+    },
+    {
+      "type": "git",
+      "name": "bevy-examples",
+      "url": "https://github.com/bevyengine/bevy",
+      "branch": "release-0.18.1",
+      "searchPath": "examples"
     }
   ],
+  "model": "claude-haiku-4.5",
+  "provider": "github-copilot"
 }
