@@ -166,7 +166,6 @@ pub fn softbody_step(
     mut substeps: ResMut<SubstepCounter>,
 ) {
     let dt = time.delta_secs();
-    let dt2 = dt * dt;
     let half = bounds.half;
 
     // Convert per-second damping to per-tick factor (frame-rate independent).
@@ -177,47 +176,9 @@ pub fn softbody_step(
         // --- 1) Verlet integrate all points; add gravity EACH tick; bounce on window AABB
         for &e in &soft.points {
             if let Ok(mut p) = q_points.get_mut(e) {
-                let x_t = p.position;
-                let x_tm1 = p.previous_position;
-
-                // Accumulate this tick's forces: keep transient forces in p.acceleration,
-                // and ADD constant gravity each tick (otherwise the body won't fall).
-                let a = p.acceleration + GRAVITY;
-
-                // Position-Verlet with damping on (x_t - x_{t-1})
-                let vel_term = (x_t - x_tm1) * damping_per_tick;
-                let mut x_tp1 = x_t + vel_term + a * dt2;
-
-                // Inferred velocity for bounce reflection
-                let mut v = x_tp1 - x_t;
-
-                // Window bounds with per-point radius (origin at center) :contentReference[oaicite:2]{index=2}
-                let left = -half.x + p.radius;
-                let right = half.x - p.radius;
-                let bottom = -half.y + p.radius;
-                let top = half.y - p.radius;
-
-                if x_tp1.x < left {
-                    x_tp1.x = left;
-                    v.x = -v.x * p.bounciness;
-                }
-                if x_tp1.x > right {
-                    x_tp1.x = right;
-                    v.x = -v.x * p.bounciness;
-                }
-                if x_tp1.y < bottom {
-                    x_tp1.y = bottom;
-                    v.y = -v.y * p.bounciness;
-                }
-                if x_tp1.y > top {
-                    x_tp1.y = top;
-                    v.y = -v.y * p.bounciness;
-                }
-
-                // Advance Verlet state; clear per-tick forces (gravity is re-added next tick)
-                p.previous_position = x_tp1 - v;
-                p.position = x_tp1;
-                p.acceleration = Vec2::ZERO;
+                p.acceleration += GRAVITY;
+                p.verlet_step(dt, damping_per_tick);
+                p.bounce_in_bounds(half);
             }
         }
 

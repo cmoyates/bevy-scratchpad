@@ -140,20 +140,19 @@ impl Point {
         let bottom = -half_extents.y + self.radius;
         let top = half_extents.y - self.radius;
 
-        // Clamp & reflect X
         if self.position.x < left {
             self.position.x = left;
             v.x = -v.x * self.bounciness;
-        } else if self.position.x > right {
+        }
+        if self.position.x > right {
             self.position.x = right;
             v.x = -v.x * self.bounciness;
         }
-
-        // Clamp & reflect Y
         if self.position.y < bottom {
             self.position.y = bottom;
             v.y = -v.y * self.bounciness;
-        } else if self.position.y > top {
+        }
+        if self.position.y > top {
             self.position.y = top;
             v.y = -v.y * self.bounciness;
         }
@@ -190,5 +189,84 @@ impl Point {
             return true;
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPSILON: f32 = 1e-4;
+
+    #[test]
+    fn verlet_step_stationary_no_accel() {
+        let mut p = Point::new(Vec2::new(10.0, 10.0), 0);
+        p.verlet_step(1.0 / 60.0, 1.0);
+        assert!((p.position - Vec2::new(10.0, 10.0)).length() < EPSILON);
+    }
+
+    #[test]
+    fn verlet_step_applies_acceleration() {
+        let mut p = Point::new(Vec2::new(0.0, 0.0), 0);
+        let dt = 1.0 / 60.0;
+        p.acceleration = Vec2::new(0.0, -980.0);
+        p.verlet_step(dt, 1.0);
+        // should move downward
+        assert!(p.position.y < 0.0);
+        // acceleration cleared after step
+        assert_eq!(p.acceleration, Vec2::ZERO);
+    }
+
+    #[test]
+    fn verlet_step_preserves_velocity() {
+        let dt = 1.0 / 60.0;
+        let mut p = Point::with_initial_velocity(Vec2::ZERO, Vec2::new(100.0, 0.0), dt, 0);
+        p.verlet_step(dt, 1.0);
+        // should move right by ~100*dt
+        assert!((p.position.x - 100.0 * dt).abs() < EPSILON);
+    }
+
+    #[test]
+    fn verlet_step_damping_reduces_velocity() {
+        let dt = 1.0 / 60.0;
+        let mut undamped = Point::with_initial_velocity(Vec2::ZERO, Vec2::X * 100.0, dt, 0);
+        let mut damped = Point::with_initial_velocity(Vec2::ZERO, Vec2::X * 100.0, dt, 1);
+        undamped.verlet_step(dt, 1.0);
+        damped.verlet_step(dt, 0.5);
+        assert!(damped.position.x < undamped.position.x);
+    }
+
+    #[test]
+    fn bounce_in_bounds_reflects_x() {
+        let mut p = Point::new(Vec2::ZERO, 0);
+        p.radius = 0.0;
+        p.bounciness = 1.0;
+        p.position = Vec2::new(110.0, 0.0);
+        p.previous_position = Vec2::new(90.0, 0.0);
+        p.bounce_in_bounds(Vec2::new(100.0, 100.0));
+        assert!((p.position.x - 100.0).abs() < EPSILON);
+    }
+
+    #[test]
+    fn bounce_in_bounds_respects_radius() {
+        let mut p = Point::new(Vec2::ZERO, 0);
+        p.radius = 10.0;
+        p.bounciness = 1.0;
+        p.position = Vec2::new(95.0, 0.0);
+        p.previous_position = Vec2::new(85.0, 0.0);
+        // right bound = 100 - 10 = 90, so 95 > 90 triggers bounce
+        p.bounce_in_bounds(Vec2::new(100.0, 100.0));
+        assert!((p.position.x - 90.0).abs() < EPSILON);
+    }
+
+    #[test]
+    fn bounce_in_bounds_no_effect_inside() {
+        let mut p = Point::new(Vec2::ZERO, 0);
+        p.radius = 0.0;
+        p.position = Vec2::new(50.0, 50.0);
+        p.previous_position = Vec2::new(49.0, 49.0);
+        let original_pos = p.position;
+        p.bounce_in_bounds(Vec2::new(100.0, 100.0));
+        assert_eq!(p.position, original_pos);
     }
 }
