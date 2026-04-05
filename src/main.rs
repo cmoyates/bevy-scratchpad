@@ -1,9 +1,7 @@
 use bevy::prelude::*;
-mod config;
-mod physics;
 
-use config::PHYSICS_HZ;
-use physics::PhysicsPlugin;
+use bevy_scratchpad::config::PHYSICS_HZ;
+use bevy_scratchpad::physics::PhysicsPlugin;
 
 fn main() {
     let mut app = App::new();

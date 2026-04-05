@@ -1,4 +1,5 @@
 use bevy::math::Vec2;
+use tracing::info_span;
 
 use crate::physics::geometry::{collide_point_with_swept_effector, dilation_corrections};
 
@@ -29,6 +30,7 @@ pub fn solve_iteration(
     disp_weights: &mut Vec<u32>,
     corrections: &mut Vec<Vec2>,
 ) -> SolveResult {
+    let _span = info_span!("solve_iteration", name = "solve_iteration").entered();
     let n = positions.len();
 
     disp_accum.clear();

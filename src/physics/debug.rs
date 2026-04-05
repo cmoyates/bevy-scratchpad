@@ -1,3 +1,5 @@
+use tracing::info_span;
+
 use crate::config::MOUSE_RADIUS;
 use crate::physics::systems::CursorWorld;
 use bevy::prelude::*;
@@ -31,6 +33,7 @@ pub fn rebuild_outline_cache(
     mut dirty: ResMut<OutlineDirty>,
     mut cache: ResMut<OutlineCache>,
 ) {
+    let _span = info_span!("rebuild_outline_cache", name = "rebuild_outline_cache").entered();
     if !dirty.0 {
         return;
     }
