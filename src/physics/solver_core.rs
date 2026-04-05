@@ -223,14 +223,6 @@ impl SolverScratch {
         self.disp_y.resize(n, 0.0);
         self.disp_weights.resize(n, 0);
     }
-
-    fn zero(&mut self, n: usize) {
-        for i in 0..n {
-            self.disp_x[i] = 0.0;
-            self.disp_y[i] = 0.0;
-            self.disp_weights[i] = 0;
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

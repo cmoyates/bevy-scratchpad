@@ -5,6 +5,7 @@ pub mod point;
 pub mod soft_body;
 pub mod solver;
 pub use soft_body::WorldBounds;
+pub mod solver_core;
 pub mod systems;
 
 use soft_body::{softbody_step, spawn_demo_like_python, update_world_bounds};
@@ -39,7 +40,7 @@ impl Plugin for PhysicsRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CursorWorld>()
             .init_resource::<debug::OutlineCache>()
-            .add_systems(Startup, spawn_demo_like_python)
+            .add_systems(Startup, (spawn_demo_like_python, debug::spawn_outline_mesh))
             .add_systems(
                 Update,
                 (
@@ -47,8 +48,7 @@ impl Plugin for PhysicsRenderPlugin {
                     systems::update_cursor_world,
                     debug::draw_effector_gizmo,
                     systems::exit_on_esc_or_q_if_native,
-                    debug::rebuild_outline_cache,
-                    debug::draw_blob_outline,
+                    debug::update_outline_mesh,
                 ),
             );
     }
