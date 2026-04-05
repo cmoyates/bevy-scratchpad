@@ -13,18 +13,22 @@ var<storage, read> positions: array<vec2<f32>>;
 struct Vertex {
     @builtin(instance_index) instance_index: u32,
     @builtin(vertex_index) vertex_index: u32,
-    // Dummy position attribute — required by Mesh2d pipeline but ignored.
-    // We pull the real position from the SSBO.
-    @location(0) _position: vec3<f32>,
+    @location(0) fallback_position: vec3<f32>,
 }
 
 @vertex
 fn vertex(vertex: Vertex) -> VertexOutput {
     var out: VertexOutput;
 
-    // Pull 2D position from storage buffer
-    let pos2d = positions[vertex.vertex_index];
-    let local_pos = vec4<f32>(pos2d.x, pos2d.y, 0.0, 1.0);
+    // Pull 2D position from storage buffer, fall back to mesh position
+    let n = arrayLength(&positions);
+    var local_pos: vec4<f32>;
+    if vertex.vertex_index < n {
+        let pos2d = positions[vertex.vertex_index];
+        local_pos = vec4<f32>(pos2d.x, pos2d.y, 0.0, 1.0);
+    } else {
+        local_pos = vec4<f32>(vertex.fallback_position, 1.0);
+    }
 
     let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
     out.world_position = mesh_functions::mesh2d_position_local_to_world(

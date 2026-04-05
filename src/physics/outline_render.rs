@@ -82,7 +82,7 @@ pub fn update_ssbo_outline(
     q_outline: Query<(&Mesh2d, &MeshMaterial2d<OutlineMaterial>), With<SsboOutline>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
-    materials: Res<Assets<OutlineMaterial>>,
+    mut materials: ResMut<Assets<OutlineMaterial>>,
 ) {
     let _span = info_span!("update_ssbo_outline").entered();
     if !dirty.0 {
@@ -117,21 +117,24 @@ pub fn update_ssbo_outline(
     let vert_count = src.len() + 1;
     let position_data: Vec<[f32; 2]> = src.iter().chain(src.first()).map(|v| [v.x, v.y]).collect();
 
-    // Update the SSBO with new position data
     let Ok((mesh_handle, mat_handle)) = q_outline.single() else {
         return;
     };
 
-    if let Some(mat) = materials.get(&mat_handle.0)
-        && let Some(buffer) = buffers.get_mut(&mat.positions)
-    {
-        buffer.set_data(position_data);
+    if let Some(mat) = materials.get(&mat_handle.0) {
+        let ssbo_handle = mat.positions.clone();
+        let _ = buffers.insert(&ssbo_handle, ShaderStorageBuffer::from(position_data));
+    } else {
+        return;
     }
 
-    // Resize the dummy mesh to match vertex count
+    // Touch the material so its bind group is recreated pointing to the new GPU buffer
+    let _ = materials.get_mut(&mat_handle.0);
+
+    // Resize dummy mesh to match SSBO vertex count so the GPU issues enough draw calls
     if let Some(mesh) = meshes.get_mut(&mesh_handle.0) {
-        let dummy: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0]; vert_count];
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, dummy);
+        let positions: Vec<[f32; 3]> = vec![[0.0; 3]; vert_count];
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         let indices: Vec<u32> = (0..vert_count as u32).collect();
         mesh.insert_indices(Indices::U32(indices));
     }
