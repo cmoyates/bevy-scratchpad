@@ -3,12 +3,9 @@ use bevy::window::PrimaryWindow;
 
 use super::point::Point;
 use crate::config::*;
-use crate::physics::geometry::{collide_point_with_swept_effector, dilation_corrections};
+use crate::physics::solver::{self, EffectorInput};
 use crate::physics::systems::MouseEffector;
 use crate::physics::systems::SubstepCounter;
-
-/// How many Gauss–Seidel iterations to run per fixed tick (from config).
-pub const CONSTRAINT_ITERATIONS: usize = crate::config::CONSTRAINT_ITERATIONS;
 
 /// A soft body made of ring-connected `Point` particles (n-gon).
 /// Stores parameters and the spawned point entity IDs.
@@ -157,10 +154,9 @@ pub fn softbody_step(
     mut q_soft: Query<&mut SoftBody>,
     buttons: Res<ButtonInput<MouseButton>>,
     effector: Res<MouseEffector>,
-    // Scratch buffers to avoid per-frame allocations in tight loops
+    mut pos_buf: Local<Vec<Vec2>>,
     mut disp_accum_buf: Local<Vec<Vec2>>,
     mut disp_weight_buf: Local<Vec<u32>>,
-    mut poly_buf: Local<Vec<Vec2>>,
     mut corrections_buf: Local<Vec<Vec2>>,
     mut outline_dirty: ResMut<crate::physics::systems::OutlineDirty>,
     mut substeps: ResMut<SubstepCounter>,
@@ -183,101 +179,47 @@ pub fn softbody_step(
         }
 
         // --- 2) Constraint solve (Gauss–Seidel): distance + area (dilation)
-        // Based on Position-Based Dynamics (Jakobsen / Müller et al.). :contentReference[oaicite:3]{index=3}
-        // Cap total heavy iterations done per render frame across fixed steps
         if substeps.0 >= MAX_SUBSTEPS_PER_FRAME {
             break;
         }
         substeps.0 += 1;
 
+        // Extract positions from ECS into contiguous buffer for solver
+        pos_buf.clear();
+        for &e in &soft.points {
+            let pos = q_points.get(e).map(|p| p.position).unwrap_or(Vec2::ZERO);
+            pos_buf.push(pos);
+        }
+
+        let effector_input = EffectorInput {
+            active: buttons.pressed(MouseButton::Left),
+            prev: effector.prev,
+            curr: effector.curr,
+            radius: effector.radius,
+        };
+
+        let mut any_moved = false;
         for _ in 0..CONSTRAINT_ITERATIONS {
-            // 2a) Distance constraints between ring neighbors: accumulate symmetric corrections
-            disp_accum_buf.clear();
-            disp_accum_buf.resize(soft.num_points, Vec2::ZERO);
-            disp_weight_buf.clear();
-            disp_weight_buf.resize(soft.num_points, 0);
+            let result = solver::solve_iteration(
+                &mut pos_buf,
+                soft.chord_length,
+                soft.desired_area,
+                soft.circumference,
+                &effector_input,
+                &mut disp_accum_buf,
+                &mut disp_weight_buf,
+                &mut corrections_buf,
+            );
+            any_moved |= result.any_moved;
+        }
 
-            for i in 0..soft.num_points {
-                let i_next = (i + 1) % soft.num_points;
-
-                // read positions
-                let (pi, pj) = {
-                    let p_i = q_points
-                        .get_mut(soft.points[i])
-                        .ok()
-                        .map(|p| p.position)
-                        .unwrap_or(Vec2::ZERO);
-                    let p_j = q_points
-                        .get_mut(soft.points[i_next])
-                        .ok()
-                        .map(|p| p.position)
-                        .unwrap_or(Vec2::ZERO);
-                    (p_i, p_j)
-                };
-
-                let diff = pj - pi;
-                let len = diff.length();
-                if len > 0.0 && len > soft.chord_length {
-                    let error = (len - soft.chord_length) * 0.5;
-                    let offset = diff / len * error;
-                    disp_accum_buf[i] += offset;
-                    disp_accum_buf[i_next] += -offset;
-                    disp_weight_buf[i] += 1;
-                    disp_weight_buf[i_next] += 1;
+        if any_moved {
+            outline_dirty.0 = true;
+            // Write solved positions back to ECS
+            for (i, &e) in soft.points.iter().enumerate() {
+                if let Ok(mut p) = q_points.get_mut(e) {
+                    p.position = pos_buf[i];
                 }
-            }
-
-            // 2b) Area (dilation) constraint to keep blob “puffy”
-            poly_buf.clear();
-            for &e in &soft.points {
-                let pos = q_points
-                    .get(e)
-                    .ok()
-                    .map(|p| p.position)
-                    .unwrap_or(Vec2::ZERO);
-                poly_buf.push(pos);
-            }
-            dilation_corrections(&poly_buf, soft.desired_area, soft.circumference, &mut corrections_buf);
-            for (i, c) in corrections_buf.iter().copied().enumerate() {
-                disp_accum_buf[i] += c;
-                disp_weight_buf[i] += 1;
-            }
-
-            // 2c) Apply average displacement per point
-            let mut any_moved = false;
-            for i in 0..soft.num_points {
-                if disp_weight_buf[i] == 0 {
-                    continue;
-                }
-                let avg = disp_accum_buf[i] / (disp_weight_buf[i] as f32);
-                if let Ok(mut p) = q_points.get_mut(soft.points[i])
-                    && (avg.x != 0.0 || avg.y != 0.0)
-                {
-                    p.position += avg;
-                    any_moved = true;
-                }
-            }
-
-            // 2d) Interleave effector collision as a projection pass (PBD contact)
-            if buttons.pressed(MouseButton::Left) {
-                let ra = effector.prev;
-                let rb = effector.curr;
-                let r = effector.radius;
-                for i in 0..soft.num_points {
-                    if let Ok(mut p) = q_points.get_mut(soft.points[i]) {
-                        let mut pos = p.position;
-                        collide_point_with_swept_effector(&mut pos, ra, rb, r);
-                        if pos != p.position {
-                            p.position = pos;
-                            any_moved = true;
-                        }
-                    }
-                }
-            }
-
-            // Mark dirty if any point moved in this iteration
-            if any_moved {
-                outline_dirty.0 = true;
             }
         }
 

@@ -3,6 +3,7 @@ use bevy::prelude::*;
 pub mod geometry;
 pub mod point;
 pub mod soft_body;
+pub mod solver;
 pub use soft_body::WorldBounds;
 pub mod systems;
 
