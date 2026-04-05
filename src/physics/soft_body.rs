@@ -197,7 +197,7 @@ pub fn softbody_step(
     mut outline_dirty: ResMut<crate::physics::systems::OutlineDirty>,
     mut substeps: ResMut<SubstepCounter>,
 ) {
-    let _span = info_span!("softbody_step", name = "softbody_step").entered();
+    let _span = info_span!("softbody_step").entered();
 
     let dt = time.delta_secs();
     let half = bounds.half;
@@ -205,7 +205,7 @@ pub fn softbody_step(
 
     for soft in &mut q_soft {
         {
-            let _span = info_span!("verlet_integration", name = "verlet_integration").entered();
+            let _span = info_span!("verlet_integration").entered();
             for &e in &soft.points {
                 if let Ok(mut p) = q_points.get_mut(e) {
                     p.acceleration += physics.gravity;
@@ -221,7 +221,7 @@ pub fn softbody_step(
         substeps.0 += 1;
 
         {
-            let _span = info_span!("constraint_solve", name = "constraint_solve").entered();
+            let _span = info_span!("constraint_solve").entered();
 
             pos_buf.clear();
             for &e in &soft.points {
@@ -262,7 +262,7 @@ pub fn softbody_step(
         }
 
         {
-            let _span = info_span!("transform_writeback", name = "transform_writeback").entered();
+            let _span = info_span!("transform_writeback").entered();
             for &e in &soft.points {
                 if let (Ok(p), Ok(mut tf)) = (q_points.get_mut(e), q_tf.get_mut(e)) {
                     tf.translation.x = p.position.x;

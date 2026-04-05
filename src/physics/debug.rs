@@ -33,7 +33,7 @@ pub fn rebuild_outline_cache(
     mut dirty: ResMut<OutlineDirty>,
     mut cache: ResMut<OutlineCache>,
 ) {
-    let _span = info_span!("rebuild_outline_cache", name = "rebuild_outline_cache").entered();
+    let _span = info_span!("rebuild_outline_cache").entered();
     if !dirty.0 {
         return;
     }

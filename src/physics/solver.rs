@@ -30,7 +30,7 @@ pub fn solve_iteration(
     disp_weights: &mut Vec<u32>,
     corrections: &mut Vec<Vec2>,
 ) -> SolveResult {
-    let _span = info_span!("solve_iteration", name = "solve_iteration").entered();
+    let _span = info_span!("solve_iteration").entered();
     let n = positions.len();
 
     disp_accum.clear();
