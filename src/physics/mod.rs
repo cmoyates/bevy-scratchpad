@@ -9,8 +9,7 @@ pub mod systems;
 use soft_body::{softbody_step, spawn_demo_like_python, update_world_bounds};
 
 use crate::physics::systems::{
-    CursorWorld, EffectorState, OutlineDirty, SubstepCounter, effector_swept_collision_system,
-    reset_substep_counter,
+    CursorWorld, MouseEffector, OutlineDirty, SubstepCounter, reset_substep_counter,
 };
 
 pub mod debug;
@@ -22,7 +21,7 @@ impl Plugin for PhysicsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorldBounds>()
             .init_resource::<CursorWorld>()
-            .init_resource::<EffectorState>()
+            .init_resource::<MouseEffector>()
             .insert_resource(OutlineDirty(true))
             .init_resource::<SubstepCounter>()
             .init_resource::<debug::OutlineCache>()
@@ -39,10 +38,6 @@ impl Plugin for PhysicsPlugin {
                     debug::draw_blob_outline,
                 ),
             )
-            .add_systems(FixedUpdate, effector_swept_collision_system)
-            .add_systems(
-                FixedUpdate,
-                softbody_step.after(effector_swept_collision_system),
-            );
+            .add_systems(FixedUpdate, softbody_step);
     }
 }

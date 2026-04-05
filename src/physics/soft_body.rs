@@ -4,7 +4,7 @@ use bevy::window::PrimaryWindow;
 use super::point::Point;
 use crate::config::*;
 use crate::physics::geometry::{collide_point_with_swept_effector, dilation_corrections};
-use crate::physics::systems::EffectorState;
+use crate::physics::systems::MouseEffector;
 use crate::physics::systems::SubstepCounter;
 
 /// How many Gauss–Seidel iterations to run per fixed tick (from config).
@@ -155,8 +155,8 @@ pub fn softbody_step(
     mut q_points: Query<&mut Point>,
     mut q_tf: Query<&mut Transform>,
     mut q_soft: Query<&mut SoftBody>,
-    buttons: Res<ButtonInput<MouseButton>>, // for left-press state
-    eff: Res<EffectorState>,                // current effector state
+    buttons: Res<ButtonInput<MouseButton>>,
+    effector: Res<MouseEffector>,
     // Scratch buffers to avoid per-frame allocations in tight loops
     mut disp_accum_buf: Local<Vec<Vec2>>,
     mut disp_weight_buf: Local<Vec<u32>>,
@@ -260,9 +260,9 @@ pub fn softbody_step(
 
             // 2d) Interleave effector collision as a projection pass (PBD contact)
             if buttons.pressed(MouseButton::Left) {
-                let ra = eff.prev;
-                let rb = eff.curr;
-                let r = eff.radius; // no speculative padding (step 2 reverted)
+                let ra = effector.prev;
+                let rb = effector.curr;
+                let r = effector.radius;
                 for i in 0..soft.num_points {
                     if let Ok(mut p) = q_points.get_mut(soft.points[i]) {
                         let mut pos = p.position;
