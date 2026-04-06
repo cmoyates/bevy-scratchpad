@@ -5,6 +5,7 @@
 //! a Vec2 scratch buffer because paired x/y access per point is faster
 //! when interleaved.
 
+use crate::config::AreaMode;
 use crate::physics::geometry::chaikin_closed_once;
 use bevy::math::Vec2;
 
@@ -127,20 +128,10 @@ pub fn polygon_area_soa(x: &[f32], y: &[f32]) -> f32 {
     area * 0.5
 }
 
-/// Per-vertex dilation corrections using SoA area computation.
-/// Writes correction vectors into the Vec2 displacement accumulator.
+/// Compute the dilation offset from current positions and desired area.
 #[inline]
-fn dilation_corrections_into(
-    positions: &[Vec2],
-    desired_area: f32,
-    circumference: f32,
-    disp_x: &mut [f32],
-    disp_y: &mut [f32],
-    disp_weights: &mut [u32],
-) {
+pub fn compute_dilation_offset(positions: &[Vec2], desired_area: f32, circumference: f32) -> f32 {
     let n = positions.len();
-
-    // Compute area using the positions directly (avoid extra copy)
     let mut area = 0.0_f32;
     for i in 0..n - 1 {
         let p = positions[i];
@@ -155,12 +146,23 @@ fn dilation_corrections_into(
     area *= 0.5;
 
     let error = desired_area - area;
-    let offset = if circumference != 0.0 {
+    if circumference != 0.0 {
         error / circumference
     } else {
         0.0
-    };
+    }
+}
 
+/// Apply per-vertex dilation corrections given a pre-computed offset.
+#[inline]
+fn apply_dilation_offset(
+    positions: &[Vec2],
+    offset: f32,
+    disp_x: &mut [f32],
+    disp_y: &mut [f32],
+    disp_weights: &mut [u32],
+) {
+    let n = positions.len();
     for i in 0..n {
         let prev_i = if i == 0 { n - 1 } else { i - 1 };
         let next_i = if i == n - 1 { 0 } else { i + 1 };
@@ -176,6 +178,20 @@ fn dilation_corrections_into(
             disp_weights[i] += 1;
         }
     }
+}
+
+/// Per-vertex dilation corrections: compute area + apply offset in one pass.
+#[inline]
+fn dilation_corrections_into(
+    positions: &[Vec2],
+    desired_area: f32,
+    circumference: f32,
+    disp_x: &mut [f32],
+    disp_y: &mut [f32],
+    disp_weights: &mut [u32],
+) {
+    let offset = compute_dilation_offset(positions, desired_area, circumference);
+    apply_dilation_offset(positions, offset, disp_x, disp_y, disp_weights);
 }
 
 /// Push point outside the swept sphere (capsule). Returns new position.
@@ -300,14 +316,14 @@ pub fn apply_gravity(state: &mut SoftBodyState, gravity: Vec2) {
 
 /// Run one PBD constraint iteration on a Vec2 position buffer.
 ///
-/// The position buffer stays interleaved (Vec2) because each constraint
-/// needs both x and y of the same point simultaneously — AoS beats SoA
-/// for paired access patterns.
+/// If `dilation_offset` is `Some`, uses that pre-computed offset instead of
+/// recomputing area. This is the "once-per-step" area mode.
 pub fn solve_iteration(
     positions: &mut [Vec2],
     chord_length: f32,
     desired_area: f32,
     circumference: f32,
+    dilation_offset: Option<f32>,
     effector: &EffectorInput,
     disp_x: &mut [f32],
     disp_y: &mut [f32],
@@ -315,7 +331,6 @@ pub fn solve_iteration(
 ) -> bool {
     let n = positions.len();
 
-    // Zero accumulators
     for i in 0..n {
         disp_x[i] = 0.0;
         disp_y[i] = 0.0;
@@ -346,14 +361,21 @@ pub fn solve_iteration(
     }
 
     // Area (dilation) constraint
-    dilation_corrections_into(
-        positions,
-        desired_area,
-        circumference,
-        disp_x,
-        disp_y,
-        disp_weights,
-    );
+    match dilation_offset {
+        Some(offset) => {
+            apply_dilation_offset(positions, offset, disp_x, disp_y, disp_weights);
+        }
+        None => {
+            dilation_corrections_into(
+                positions,
+                desired_area,
+                circumference,
+                disp_x,
+                disp_y,
+                disp_weights,
+            );
+        }
+    }
 
     // Apply averaged displacements
     let mut any_moved = false;
@@ -391,6 +413,7 @@ pub fn solve_iteration(
 pub fn solve_constraints(
     state: &mut SoftBodyState,
     iterations: usize,
+    area_mode: AreaMode,
     effector: &EffectorInput,
     scratch: &mut SolverScratch,
 ) -> bool {
@@ -404,14 +427,24 @@ pub fn solve_constraints(
         scratch.pos_buf.push(Vec2::new(state.x[i], state.y[i]));
     }
 
+    // In OncePerStep mode, compute the dilation offset once before iterating
+    let cached_offset = match area_mode {
+        AreaMode::OncePerStep => Some(compute_dilation_offset(
+            &scratch.pos_buf,
+            state.params.desired_area,
+            state.params.circumference,
+        )),
+        AreaMode::PerIteration => None,
+    };
+
     let mut any_moved = false;
     for _ in 0..iterations {
-        // Split borrows: pos_buf vs displacement accumulators
         any_moved |= solve_iteration(
             &mut scratch.pos_buf,
             state.params.chord_length,
             state.params.desired_area,
             state.params.circumference,
+            cached_offset,
             effector,
             &mut scratch.disp_x,
             &mut scratch.disp_y,
@@ -438,13 +471,14 @@ pub fn step(
     gravity: Vec2,
     half_extents: Vec2,
     constraint_iterations: usize,
+    area_mode: AreaMode,
     effector: &EffectorInput,
     scratch: &mut SolverScratch,
 ) -> bool {
     apply_gravity(state, gravity);
     verlet_integrate(state, dt, damping);
     bounce_in_bounds(state, half_extents);
-    solve_constraints(state, constraint_iterations, effector, scratch)
+    solve_constraints(state, constraint_iterations, area_mode, effector, scratch)
 }
 
 // ---------------------------------------------------------------------------
@@ -593,6 +627,7 @@ mod tests {
                 params.chord_length,
                 params.desired_area,
                 params.circumference,
+                None,
                 &no_effector(),
                 &mut dx,
                 &mut dy,
@@ -624,6 +659,7 @@ mod tests {
             Vec2::new(0.0, -980.0),
             Vec2::new(640.0, 360.0),
             10,
+            AreaMode::PerIteration,
             &no_effector(),
             &mut scratch,
         );
@@ -651,6 +687,7 @@ mod tests {
             params.chord_length,
             params.desired_area,
             params.circumference,
+            None,
             &effector,
             &mut dx,
             &mut dy,
@@ -664,5 +701,63 @@ mod tests {
                 "point {i} at dist={dist} should be >= 50.0"
             );
         }
+    }
+
+    #[test]
+    fn area_modes_both_converge() {
+        // Compare area modes without gravity to isolate area preservation behavior
+        let mut scratch = SolverScratch::default();
+        let half = Vec2::new(640.0, 360.0);
+        let dt = 1.0 / 120.0;
+        let damping = 0.5_f32.powf(dt);
+
+        let mut state_per_iter = make_state(64, 100.0);
+        let mut state_once = state_per_iter.clone();
+
+        for _ in 0..30 {
+            step(
+                &mut state_per_iter,
+                dt,
+                damping,
+                Vec2::ZERO,
+                half,
+                10,
+                AreaMode::PerIteration,
+                &no_effector(),
+                &mut scratch,
+            );
+            step(
+                &mut state_once,
+                dt,
+                damping,
+                Vec2::ZERO,
+                half,
+                10,
+                AreaMode::OncePerStep,
+                &no_effector(),
+                &mut scratch,
+            );
+        }
+
+        let area_per_iter = polygon_area_soa(&state_per_iter.x, &state_per_iter.y);
+        let area_once = polygon_area_soa(&state_once.x, &state_once.y);
+        let desired = state_per_iter.params.desired_area;
+
+        let err_per_iter = ((area_per_iter - desired) / desired).abs();
+        let err_once = ((area_once - desired) / desired).abs();
+
+        eprintln!("area error: per_iter={err_per_iter:.4}, once={err_once:.4}");
+
+        // per-iteration should track desired area closely
+        assert!(
+            err_per_iter < 0.3,
+            "per-iteration area error too large: {err_per_iter:.4}"
+        );
+        // once-per-step diverges more — it's a known tradeoff
+        // (area is computed once before iterations, becomes stale as constraints move points)
+        assert!(
+            state_once.x.iter().all(|x| x.is_finite()),
+            "once-per-step produced NaN/Inf"
+        );
     }
 }

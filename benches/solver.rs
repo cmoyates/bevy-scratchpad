@@ -5,6 +5,7 @@
 use bevy::math::Vec2;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
+use bevy_scratchpad::config::AreaMode;
 use bevy_scratchpad::physics::geometry::{dilation_corrections, polygon_area_signed};
 use bevy_scratchpad::physics::solver_core::{
     self, BodyParams, EffectorInput, SoftBodyState, SolverScratch,
@@ -110,6 +111,7 @@ fn bench_solve_iteration(c: &mut Criterion) {
                     params.chord_length,
                     params.desired_area,
                     params.circumference,
+                    None,
                     &no_effector(),
                     &mut dx,
                     &mut dy,
@@ -128,7 +130,7 @@ fn bench_full_step(c: &mut Criterion) {
     let mut scratch = SolverScratch::default();
 
     for &n in SCALES {
-        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
+        group.bench_with_input(BenchmarkId::new("per_iter", n), &n, |b, &n| {
             let mut state = make_state(n);
             b.iter(|| {
                 solver_core::step(
@@ -138,6 +140,23 @@ fn bench_full_step(c: &mut Criterion) {
                     Vec2::new(0.0, -980.0),
                     Vec2::new(640.0, 360.0),
                     10,
+                    AreaMode::PerIteration,
+                    &no_effector(),
+                    &mut scratch,
+                );
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("once_per_step", n), &n, |b, &n| {
+            let mut state = make_state(n);
+            b.iter(|| {
+                solver_core::step(
+                    &mut state,
+                    1.0 / 120.0,
+                    0.5_f32.powf(1.0 / 120.0),
+                    Vec2::new(0.0, -980.0),
+                    Vec2::new(640.0, 360.0),
+                    10,
+                    AreaMode::OncePerStep,
                     &no_effector(),
                     &mut scratch,
                 );

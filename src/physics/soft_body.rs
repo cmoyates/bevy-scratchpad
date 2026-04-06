@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::tasks::ComputeTaskPool;
 use bevy::window::PrimaryWindow;
 
 use tracing::info_span;
@@ -173,12 +174,14 @@ pub fn softbody_step(
         radius: effector.radius,
     };
 
-    for mut soft in &mut q_soft {
-        if substeps.0 >= physics.max_substeps_per_frame {
-            break;
-        }
-        substeps.0 += 1;
+    // Substep counter limits FixedUpdate ticks per frame, not per-body iterations.
+    // Increment once per tick, then process all bodies.
+    if substeps.0 >= physics.max_substeps_per_frame {
+        return;
+    }
+    substeps.0 += 1;
 
+    for mut soft in &mut q_soft {
         let any_moved = {
             let _span = info_span!("solver_core_step").entered();
             solver_core::step(
@@ -188,6 +191,7 @@ pub fn softbody_step(
                 physics.gravity,
                 bounds.half,
                 physics.constraint_iterations,
+                physics.area_mode,
                 &effector_input,
                 &mut scratch,
             )
@@ -205,6 +209,94 @@ pub fn softbody_step(
                 if let Ok(mut tf) = q_tf.get_mut(e) {
                     tf.translation.x = soft.state.x[i];
                     tf.translation.y = soft.state.y[i];
+                }
+            }
+        }
+    }
+}
+
+/// Resource flag: when present, `softbody_step_parallel` is used instead of `softbody_step`.
+#[derive(Resource)]
+pub struct ParallelPhysics;
+
+/// Parallel variant: steps all bodies concurrently via ComputeTaskPool,
+/// then syncs back to ECS sequentially.
+pub fn softbody_step_parallel(
+    time: Res<Time>,
+    bounds: Res<WorldBounds>,
+    physics: Res<PhysicsParams>,
+    mut q_soft: Query<&mut SoftBody>,
+    mut q_tf: Query<&mut Transform>,
+    mut q_points: Query<&mut Point>,
+    buttons: Res<ButtonInput<MouseButton>>,
+    effector: Res<MouseEffector>,
+    mut outline_dirty: ResMut<crate::physics::systems::OutlineDirty>,
+    mut substeps: ResMut<SubstepCounter>,
+) {
+    let _span = info_span!("softbody_step_parallel").entered();
+
+    let dt = time.delta_secs();
+    let damping_per_tick = physics.damping_per_second.powf(dt);
+
+    if bounds.half == Vec2::ZERO {
+        return;
+    }
+    if substeps.0 >= physics.max_substeps_per_frame {
+        return;
+    }
+    substeps.0 += 1;
+
+    let effector_input = EffectorInput {
+        active: buttons.pressed(MouseButton::Left),
+        prev: effector.prev,
+        curr: effector.curr,
+        radius: effector.radius,
+    };
+
+    // Collect mutable state refs for parallel stepping
+    let mut bodies: Vec<Mut<SoftBody>> = q_soft.iter_mut().collect();
+    let gravity = physics.gravity;
+    let half = bounds.half;
+    let iterations = physics.constraint_iterations;
+    let area_mode = physics.area_mode;
+
+    // Step all bodies in parallel — each gets its own scratch buffer
+    let pool = ComputeTaskPool::get();
+    let moved_flags: Vec<bool> = pool.scope(|s| {
+        for body in bodies.iter_mut() {
+            let state = &mut body.state as *mut SoftBodyState;
+            let eff = &effector_input;
+            s.spawn(async move {
+                let mut scratch = SolverScratch::default();
+                // SAFETY: each body's state is independent, no aliasing
+                let state = unsafe { &mut *state };
+                solver_core::step(
+                    state,
+                    dt,
+                    damping_per_tick,
+                    gravity,
+                    half,
+                    iterations,
+                    area_mode,
+                    eff,
+                    &mut scratch,
+                )
+            });
+        }
+    });
+
+    // Sync back to ECS sequentially
+    for (body, &moved) in bodies.iter().zip(moved_flags.iter()) {
+        if moved {
+            outline_dirty.0 = true;
+            for (i, &e) in body.point_entities.iter().enumerate() {
+                if let Ok(mut p) = q_points.get_mut(e) {
+                    p.position.x = body.state.x[i];
+                    p.position.y = body.state.y[i];
+                }
+                if let Ok(mut tf) = q_tf.get_mut(e) {
+                    tf.translation.x = body.state.x[i];
+                    tf.translation.y = body.state.y[i];
                 }
             }
         }

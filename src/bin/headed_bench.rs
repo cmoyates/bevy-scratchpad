@@ -4,14 +4,21 @@
 //! Reports per-frame breakdown of solver vs total frame time.
 //!
 //! Run: cargo run --bin headed-bench --release
-//! Env: NUM_POINTS (default 256), BENCH_FRAMES (default 300)
+//!
+//! Env vars:
+//!   NUM_POINTS   (default 256)  — points per body
+//!   NUM_BODIES   (default 1)    — independent soft bodies
+//!   BENCH_FRAMES (default 300)  — frames to collect
+//!   VSYNC        (default 1)    — 0 to uncap frame rate
+//!   AREA_MODE    (default "per_iteration") — "per_iteration" or "once_per_step"
 
 use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
+use bevy::window::PresentMode;
 use std::time::Duration;
 
-use bevy_scratchpad::config::{DemoConfig, PHYSICS_HZ, PhysicsParams};
+use bevy_scratchpad::config::{AreaMode, DemoConfig, PHYSICS_HZ, PhysicsParams};
 use bevy_scratchpad::physics::PhysicsPlugin;
 use bevy_scratchpad::physics::soft_body::spawn_soft_body;
 use bevy_scratchpad::physics::systems::MouseEffector;
@@ -23,11 +30,21 @@ fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
         .unwrap_or(default)
 }
 
-/// Accumulates per-frame timing samples.
+fn parse_area_mode() -> AreaMode {
+    match std::env::var("AREA_MODE").as_deref() {
+        Ok("once_per_step") => AreaMode::OncePerStep,
+        _ => AreaMode::PerIteration,
+    }
+}
+
+/// Accumulates per-frame timing samples with phase breakdown.
 #[derive(Resource)]
 struct FrameTimings {
     num_points: usize,
+    num_bodies: usize,
     target_frames: u32,
+    vsync: bool,
+    area_mode: AreaMode,
     frame_times: Vec<f64>,
     last_frame_start: std::time::Instant,
     started: bool,
@@ -35,16 +52,29 @@ struct FrameTimings {
 
 fn main() {
     let num_points: usize = env_or("NUM_POINTS", 256);
+    let num_bodies: usize = env_or("NUM_BODIES", 1);
     let benchmark_frames: u32 = env_or("BENCH_FRAMES", 300);
+    let vsync: bool = env_or("VSYNC", 1) != 0;
+    let area_mode = parse_area_mode();
 
     let frame_dt = Duration::from_secs_f64(1.0 / 60.0);
+
+    let present_mode = if vsync {
+        PresentMode::AutoVsync
+    } else {
+        PresentMode::AutoNoVsync
+    };
 
     let mut app = App::new();
 
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
-            title: format!("Headed Bench — {num_points} points"),
+            title: format!(
+                "Headed Bench — {num_bodies}x{num_points}pt {}",
+                if vsync { "vsync" } else { "uncapped" }
+            ),
             resolution: (1280u32, 720u32).into(),
+            present_mode,
             ..default()
         }),
         ..default()
@@ -57,10 +87,19 @@ fn main() {
             num_points,
             ..Default::default()
         })
+        .insert_resource(PhysicsParams {
+            area_mode,
+            // More substeps for multi-body to avoid starvation
+            max_substeps_per_frame: (num_bodies as u32 * 3).max(3),
+            ..Default::default()
+        })
         .add_plugins(PhysicsPlugin)
         .insert_resource(FrameTimings {
             num_points,
+            num_bodies,
             target_frames: benchmark_frames,
+            vsync,
+            area_mode,
             frame_times: Vec::with_capacity(benchmark_frames as usize),
             last_frame_start: std::time::Instant::now(),
             started: false,
@@ -77,6 +116,7 @@ fn spawn_headed_scene(
     mut materials: ResMut<Assets<ColorMaterial>>,
     demo: Res<DemoConfig>,
     physics: Res<PhysicsParams>,
+    timings: Res<FrameTimings>,
 ) {
     commands.spawn(Camera2d);
 
@@ -85,19 +125,34 @@ fn spawn_headed_scene(
         material: materials.add(Color::srgb(0.2, 0.7, 1.0)),
     };
 
-    spawn_soft_body(
-        &mut commands,
-        Vec2::new(0.0, 120.0),
-        demo.num_points,
-        demo.ring_radius,
-        demo.puffiness,
-        demo.initial_vel,
-        physics.gravity,
-        demo.particle_vis_radius,
-        demo.default_mass,
-        demo.default_bounciness,
-        Some(&visuals),
-    );
+    let num_bodies = timings.num_bodies;
+    let spacing = if num_bodies > 1 {
+        400.0 / num_bodies as f32
+    } else {
+        0.0
+    };
+
+    for i in 0..num_bodies {
+        let x_offset = if num_bodies > 1 {
+            (i as f32 - (num_bodies - 1) as f32 / 2.0) * spacing
+        } else {
+            0.0
+        };
+
+        spawn_soft_body(
+            &mut commands,
+            Vec2::new(x_offset, 120.0),
+            demo.num_points,
+            demo.ring_radius,
+            demo.puffiness,
+            demo.initial_vel,
+            physics.gravity,
+            demo.particle_vis_radius,
+            demo.default_mass,
+            demo.default_bounciness,
+            Some(&visuals),
+        );
+    }
 }
 
 fn scripted_effector(
@@ -127,7 +182,6 @@ fn frame_timing(mut timings: ResMut<FrameTimings>, mut exit: MessageWriter<AppEx
     let now = std::time::Instant::now();
 
     if !timings.started {
-        // Skip the first frame (startup)
         timings.started = true;
         timings.last_frame_start = now;
         return;
@@ -150,7 +204,6 @@ fn report(timings: &FrameTimings) {
         return;
     }
 
-    // Skip first 10% as warmup
     let warmup = n / 10;
     let steady: Vec<f64> = times[warmup..].to_vec();
     let count = steady.len();
@@ -164,9 +217,15 @@ fn report(timings: &FrameTimings) {
     let min = sorted[0];
     let max = sorted[count - 1];
 
+    let mode_str = if timings.vsync { "vsync" } else { "uncapped" };
+    let area_str = match timings.area_mode {
+        AreaMode::PerIteration => "per_iteration",
+        AreaMode::OncePerStep => "once_per_step",
+    };
+
     println!(
-        "=== Headed Benchmark: {} points, {} frames ({}  steady) ===",
-        timings.num_points, n, count
+        "=== Headed Benchmark: {}x{} points, {} frames ({} steady), {}, area={} ===",
+        timings.num_bodies, timings.num_points, n, count, mode_str, area_str
     );
     println!("Frame time (ms): mean={mean:.3}, median={median:.3}, p95={p95:.3}, p99={p99:.3}");
     println!("  min={min:.3}, max={max:.3}");

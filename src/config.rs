@@ -6,6 +6,16 @@ pub const PHYSICS_HZ: f64 = 120.0;
 /// Mouse effector visual/collision radius — used by MouseEffector::default().
 pub const MOUSE_RADIUS: f32 = 30.0;
 
+/// Controls how often area preservation is recomputed during constraint solving.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum AreaMode {
+    /// Recompute area every solver iteration (original behavior, most accurate).
+    #[default]
+    PerIteration,
+    /// Compute area once per step, reuse the dilation offset across iterations.
+    OncePerStep,
+}
+
 /// Runtime-tunable physics parameters.
 #[derive(Resource, Debug, Clone)]
 pub struct PhysicsParams {
@@ -13,6 +23,7 @@ pub struct PhysicsParams {
     pub damping_per_second: f32,
     pub constraint_iterations: usize,
     pub max_substeps_per_frame: u32,
+    pub area_mode: AreaMode,
 }
 
 impl Default for PhysicsParams {
@@ -22,6 +33,7 @@ impl Default for PhysicsParams {
             damping_per_second: 0.5,
             constraint_iterations: 10,
             max_substeps_per_frame: 3,
+            area_mode: AreaMode::default(),
         }
     }
 }

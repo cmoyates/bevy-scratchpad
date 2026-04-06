@@ -1,10 +1,23 @@
+//! Headless benchmark: pure physics, no window, no GPU.
+//!
+//! Run: cargo run --bin benchmark --release
+//!
+//! Env vars:
+//!   NUM_POINTS    (default 16)   — points per body
+//!   NUM_BODIES    (default 1)    — independent soft bodies
+//!   BENCH_FRAMES  (default 300)  — frames to simulate
+//!   DETERMINISTIC (default true) — deterministic time stepping
+//!   AREA_MODE     (default "per_iteration") — "per_iteration" or "once_per_step"
+//!   PARALLEL      (default 0)    — 1 to enable multi-body parallelism
+
 use bevy::app::ScheduleRunnerPlugin;
 use bevy::diagnostic::FrameCount;
+use bevy::math::Vec2;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use std::time::Duration;
 
-use bevy_scratchpad::config::{DemoConfig, PHYSICS_HZ, PhysicsParams};
+use bevy_scratchpad::config::{AreaMode, DemoConfig, PHYSICS_HZ, PhysicsParams};
 use bevy_scratchpad::physics::PhysicsCorePlugin;
 use bevy_scratchpad::physics::soft_body::{WorldBounds, spawn_soft_body};
 use bevy_scratchpad::physics::systems::MouseEffector;
@@ -19,10 +32,20 @@ fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
         .unwrap_or(default)
 }
 
+fn parse_area_mode() -> AreaMode {
+    match std::env::var("AREA_MODE").as_deref() {
+        Ok("once_per_step") => AreaMode::OncePerStep,
+        _ => AreaMode::PerIteration,
+    }
+}
+
 fn main() {
     let num_points: usize = env_or("NUM_POINTS", 16);
+    let num_bodies: usize = env_or("NUM_BODIES", 1);
     let benchmark_frames: u32 = env_or("BENCH_FRAMES", 300);
     let deterministic: bool = env_or("DETERMINISTIC", true);
+    let area_mode = parse_area_mode();
+    let parallel: bool = env_or("PARALLEL", 0) != 0;
 
     std::fs::create_dir_all("traces").ok();
     // SAFETY: called before App::new() — no threads exist yet
@@ -33,15 +56,10 @@ fn main() {
     let mut app = App::new();
 
     if deterministic {
-        // Manual stepping — no wall-clock sleep, no catch-up jitter.
-        // ManualDuration tells Bevy's time_system to advance Time<Real> by
-        // exactly this amount each update, which flows through to
-        // Time<Virtual> → Time<Fixed> accumulation deterministically.
         let frame_dt = Duration::from_secs_f64(1.0 / 60.0);
         app.add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_once()));
         app.insert_resource(TimeUpdateStrategy::ManualDuration(frame_dt));
     } else {
-        // Legacy path: wall-clock sleep (noisy but closer to real app behavior)
         app.add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(
             Duration::from_secs_f64(1.0 / 60.0),
         )));
@@ -58,18 +76,38 @@ fn main() {
             num_points,
             ..Default::default()
         })
+        .insert_resource(PhysicsParams {
+            area_mode,
+            max_substeps_per_frame: (num_bodies as u32 * 3).max(3),
+            ..Default::default()
+        })
         .init_resource::<ButtonInput<MouseButton>>()
-        .add_plugins(PhysicsCorePlugin)
-        .add_systems(Startup, spawn_benchmark_scene)
-        .add_systems(Update, (scripted_effector, auto_quit));
+        .add_plugins(PhysicsCorePlugin);
+
+    if parallel {
+        app.insert_resource(bevy_scratchpad::physics::soft_body::ParallelPhysics);
+    }
+
+    app.insert_resource(BenchConfig {
+        benchmark_frames,
+        num_bodies,
+        parallel,
+    })
+    .add_systems(Startup, spawn_benchmark_scene)
+    .add_systems(Update, (scripted_effector, auto_quit));
+
+    let area_str = match area_mode {
+        AreaMode::PerIteration => "per_iteration",
+        AreaMode::OncePerStep => "once_per_step",
+    };
 
     if deterministic {
         eprintln!(
-            "Deterministic benchmark: {} points, {} frames",
-            num_points, benchmark_frames
+            "Deterministic benchmark: {}x{} points, {} frames, area={}, parallel={}",
+            num_bodies, num_points, benchmark_frames, area_str, parallel
         );
 
-        // Startup frame (spawns entities)
+        // Startup frame
         app.update();
 
         let start = std::time::Instant::now();
@@ -77,71 +115,87 @@ fn main() {
             app.update();
         }
         let elapsed = start.elapsed();
+        let total_ms = elapsed.as_secs_f64() * 1000.0;
+        let per_frame = total_ms / benchmark_frames as f64;
 
-        println!("Benchmark complete: {benchmark_frames} frames, {num_points} points");
         println!(
-            "Wall time: {:.3}ms total, {:.3}ms/frame, {:.1} simulated FPS headroom",
-            elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_secs_f64() * 1000.0 / benchmark_frames as f64,
+            "=== Headless Benchmark: {}x{} points, {} frames, area={}, parallel={} ===",
+            num_bodies, num_points, benchmark_frames, area_str, parallel
+        );
+        println!(
+            "Wall time: {total_ms:.3}ms total, {per_frame:.3}ms/frame, {:.1} simulated FPS headroom",
             benchmark_frames as f64 / elapsed.as_secs_f64(),
         );
     } else {
         eprintln!(
-            "Legacy benchmark (wall-clock): {} points, {} frames",
-            num_points, benchmark_frames
+            "Legacy benchmark (wall-clock): {}x{} points, {} frames",
+            num_bodies, num_points, benchmark_frames
         );
-        app.insert_resource(BenchmarkConfig { benchmark_frames });
         app.run();
     }
 }
 
-/// Config resource for legacy (non-deterministic) auto-quit
 #[derive(Resource)]
-struct BenchmarkConfig {
+#[allow(dead_code)]
+struct BenchConfig {
     benchmark_frames: u32,
+    num_bodies: usize,
+    parallel: bool,
 }
 
 fn spawn_benchmark_scene(
     mut commands: Commands,
     demo: Res<DemoConfig>,
     physics: Res<PhysicsParams>,
+    config: Res<BenchConfig>,
 ) {
-    let center = Vec2::new(0.0, HALF_HEIGHT / 3.0);
+    let num_bodies = config.num_bodies;
+    let spacing = if num_bodies > 1 {
+        (HALF_WIDTH * 2.0) / (num_bodies as f32 + 1.0)
+    } else {
+        0.0
+    };
 
-    spawn_soft_body(
-        &mut commands,
-        center,
-        demo.num_points,
-        demo.ring_radius,
-        demo.puffiness,
-        demo.initial_vel,
-        physics.gravity,
-        demo.particle_vis_radius,
-        demo.default_mass,
-        demo.default_bounciness,
-        None,
-    );
+    for i in 0..num_bodies {
+        let x = if num_bodies > 1 {
+            -HALF_WIDTH + spacing * (i as f32 + 1.0)
+        } else {
+            0.0
+        };
+        let y = HALF_HEIGHT / 3.0;
+
+        spawn_soft_body(
+            &mut commands,
+            Vec2::new(x, y),
+            demo.num_points,
+            demo.ring_radius,
+            demo.puffiness,
+            demo.initial_vel,
+            physics.gravity,
+            demo.particle_vis_radius,
+            demo.default_mass,
+            demo.default_bounciness,
+            None,
+        );
+    }
 }
 
-/// Circular sweep around the body center, pressing mouse button.
 fn scripted_effector(
     frame: Res<FrameCount>,
     mut effector: ResMut<MouseEffector>,
     mut buttons: ResMut<ButtonInput<MouseButton>>,
-    config: Option<Res<BenchmarkConfig>>,
+    config: Res<BenchConfig>,
 ) {
-    let benchmark_frames = config.map_or(300, |c| c.benchmark_frames);
     let t = frame.0 as f32 / 60.0;
     let sweep_radius = 80.0;
     let angular_speed = 2.0;
-
     let angle = t * angular_speed;
     let pos = Vec2::new(angle.cos(), angle.sin()) * sweep_radius;
 
     effector.prev = effector.curr;
     effector.curr = pos;
 
-    let progress = frame.0 as f32 / benchmark_frames as f32;
+    let progress = frame.0 as f32 / config.benchmark_frames as f32;
     if (0.33..0.66).contains(&progress) {
         buttons.press(MouseButton::Left);
     } else {
@@ -149,15 +203,8 @@ fn scripted_effector(
     }
 }
 
-fn auto_quit(
-    frame: Res<FrameCount>,
-    mut exit: MessageWriter<AppExit>,
-    config: Option<Res<BenchmarkConfig>>,
-) {
-    // Only used in legacy (non-deterministic) mode
-    if let Some(cfg) = config
-        && frame.0 >= cfg.benchmark_frames
-    {
+fn auto_quit(frame: Res<FrameCount>, mut exit: MessageWriter<AppExit>, config: Res<BenchConfig>) {
+    if frame.0 >= config.benchmark_frames {
         println!("Benchmark complete: {} frames", frame.0);
         exit.write(AppExit::Success);
     }

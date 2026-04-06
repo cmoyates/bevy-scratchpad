@@ -8,7 +8,10 @@ pub use soft_body::WorldBounds;
 pub mod solver_core;
 pub mod systems;
 
-use soft_body::{softbody_step, spawn_demo_like_python, update_world_bounds};
+use soft_body::{
+    ParallelPhysics, softbody_step, softbody_step_parallel, spawn_demo_like_python,
+    update_world_bounds,
+};
 
 use crate::config::{DemoConfig, PhysicsParams};
 use crate::physics::systems::{
@@ -30,7 +33,13 @@ impl Plugin for PhysicsCorePlugin {
             .insert_resource(OutlineDirty(true))
             .init_resource::<SubstepCounter>()
             .add_systems(Update, reset_substep_counter)
-            .add_systems(FixedUpdate, softbody_step);
+            .add_systems(
+                FixedUpdate,
+                (
+                    softbody_step.run_if(not(resource_exists::<ParallelPhysics>)),
+                    softbody_step_parallel.run_if(resource_exists::<ParallelPhysics>),
+                ),
+            );
     }
 }
 
